@@ -224,7 +224,7 @@ jobs:
             echo "created=true" >> "$GITHUB_OUTPUT"
             {
               echo ""
-              echo "已创建并推送 tag：${TAG}（指向 ${UPSTREAM_SHA:0:12}）"
+              echo "已创建并推送 tag：${TAG}（指向 fork main $(git rev-parse --short HEAD)，上游快照 ${UPSTREAM_SHA:0:12} 见注解）"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
