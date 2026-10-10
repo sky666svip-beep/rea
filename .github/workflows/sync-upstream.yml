@@ -1,0 +1,304 @@
+# =============================================================================
+# 自动同步 upstream (morluto/rea) 到本 fork (sky666svip-beep/rea)，并自动打版本 tag
+#
+# 版本号规则：v{upstream/main 的 commit 总数}
+#   COMMIT_COUNT=$(git rev-list --count upstream/main)
+#   例：v1987 / v1988 ...  该 tag 打在 fork 的 main 上，标记本次同步的快照点。
+#
+# 触发：每天 UTC 19:16（北京时间次日 03:16）+ 手动 workflow_dispatch
+#
+# ---------------------------------------------------------------------------
+# 重要：必须配置仓库 Secret SYNC_TOKEN
+# ---------------------------------------------------------------------------
+# 不能用默认 GITHUB_TOKEN。原因：
+#   1. 本工作流文件本身在 .github/workflows/ 下；
+#   2. 同步是 merge upstream，上游 rea 经常修改它自己的 .github/workflows/*，
+#      这些改动会被一并带入 main 并 push。
+#   GitHub 禁止 GitHub App 类 token（含默认 GITHUB_TOKEN）推送 .github/workflows
+#   下的改动，会报 "refusing to allow a GitHub App to create or update workflow"。
+#   因此必须使用带 workflow 权限的 PAT（经典 PAT 勾选 workflow+repo，
+#   或 fine-grained PAT 授予 Contents: RW + Workflows: RW）。
+#
+# 另：main 上必然存在本 fork 自己的提交（就是这两个 workflow 文件），
+#     所以 main = upstream/main + 本 fork 的少量提交，而不是纯镜像。
+#     同步用 merge（可快进时自动快进，有本地提交时产生 merge commit）。
+# ---------------------------------------------------------------------------
+name: Sync upstream + auto tag
+
+on:
+  schedule:
+    # 每天 UTC 19:16（北京时间次日 03:16）
+    - cron: "16 19 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "演练模式：只检查，不推送、不打 tag"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: morluto/rea
+  UPSTREAM_BRANCH: main
+  TARGET_BRANCH: main
+  HUSKY: "0"
+
+jobs:
+  sync:
+    name: Sync and tag
+    runs-on: ubuntu-latest
+    steps:
+      # ---------- 0. 前置检查：必须有带 workflow 权限的 PAT ----------
+      - name: Preflight - require SYNC_TOKEN
+        env:
+          SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
+        run: |
+          set -uo pipefail
+          if [ -z "${SYNC_TOKEN}" ]; then
+            echo "::error::未配置仓库 Secret SYNC_TOKEN。"
+            echo "::error::默认 GITHUB_TOKEN 无 workflows 权限，无法推送 .github/workflows 下的改动。"
+            echo "::error::请到 Settings -> Secrets and variables -> Actions 添加 SYNC_TOKEN（PAT，需 workflow 权限）。"
+            exit 1
+          fi
+          echo "SYNC_TOKEN 已配置" >> "$GITHUB_STEP_SUMMARY"
+
+      # ---------- 1. 检出 fork 的 main，取全量历史 + 全部 tag ----------
+      - name: Checkout fork main (full history)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      # ---------- 2. 挂 upstream 远程并抓取 ----------
+      - name: Add upstream remote and fetch
+        id: fetch
+        run: |
+          set -euo pipefail
+          git remote remove upstream >/dev/null 2>&1 || true
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch --no-tags upstream "${UPSTREAM_BRANCH}"
+          git fetch --no-tags origin "${TARGET_BRANCH}"
+          git fetch --tags origin >/dev/null 2>&1 || true
+
+          LOCAL_SHA="$(git rev-parse HEAD)"
+          UPSTREAM_SHA="$(git rev-parse "upstream/${UPSTREAM_BRANCH}")"
+          UPSTREAM_COUNT="$(git rev-list --count "upstream/${UPSTREAM_BRANCH}")"
+          AHEAD="$(git rev-list --count "upstream/${UPSTREAM_BRANCH}..HEAD")"
+          BEHIND="$(git rev-list --count "HEAD..upstream/${UPSTREAM_BRANCH}")"
+
+          {
+            echo "local_sha=${LOCAL_SHA}"
+            echo "upstream_sha=${UPSTREAM_SHA}"
+            echo "upstream_count=${UPSTREAM_COUNT}"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## 同步前状态"
+            echo ""
+            echo "| 项目 | 值 |"
+            echo "| --- | --- |"
+            echo "| fork main | ${LOCAL_SHA:0:12} |"
+            echo "| upstream/${UPSTREAM_BRANCH} | ${UPSTREAM_SHA:0:12} |"
+            echo "| upstream commit 总数 | ${UPSTREAM_COUNT} |"
+            echo "| 目标 tag | v${UPSTREAM_COUNT} |"
+            echo "| fork 独有提交数 | ${AHEAD} |"
+            echo "| 落后 upstream 提交数 | ${BEHIND} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ---------- 3. 上游 force push 检测 ----------
+      # 用上一个 v-tag 里记录的 upstream-sha 做祖先判断：
+      # 若它已不在 upstream/main 的历史里，说明上游改写（force push）了历史。
+      - name: Detect upstream force push
+        id: forcepush
+        run: |
+          set -uo pipefail
+          PREV_TAG="$(git tag -l 'v*' | sort -V | tail -n1)"
+          DETECTED="false"
+          PREV_UP=""
+          if [ -n "${PREV_TAG}" ]; then
+            PREV_UP="$(git for-each-ref --format='%(contents)' "refs/tags/${PREV_TAG}" \
+              | sed -n 's/^upstream-sha: *//p' | head -n1 | tr -d '[:space:]')"
+            if [ -n "${PREV_UP}" ] && git cat-file -e "${PREV_UP}^{commit}" 2>/dev/null; then
+              if ! git merge-base --is-ancestor "${PREV_UP}" "upstream/${UPSTREAM_BRANCH}" 2>/dev/null; then
+                DETECTED="true"
+              fi
+            fi
+          fi
+          echo "detected=${DETECTED}" >> "$GITHUB_OUTPUT"
+          echo "prev_tag=${PREV_TAG}" >> "$GITHUB_OUTPUT"
+          {
+            echo ""
+            echo "force push 检测：${DETECTED}（上一个 tag：${PREV_TAG:-none}）"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Guard - upstream force push detected
+        if: steps.forcepush.outputs.detected == 'true'
+        run: |
+          echo "::error::检测到 upstream/${UPSTREAM_BRANCH} 历史被改写（force push）。已停止同步，未做任何推送。"
+          exit 1
+
+      # ---------- 4. 合并 upstream/main（可快进则快进，否则产生 merge commit） ----------
+      - name: Merge upstream into main
+        id: merge
+        if: steps.forcepush.outputs.detected != 'true'
+        run: |
+          set -euo pipefail
+          BEFORE="$(git rev-parse HEAD)"
+          if ! git merge --no-edit "upstream/${UPSTREAM_BRANCH}"; then
+            git merge --abort >/dev/null 2>&1 || true
+            echo "::error::合并 upstream/${UPSTREAM_BRANCH} 出现冲突，已 abort。"
+            exit 1
+          fi
+          AFTER="$(git rev-parse HEAD)"
+          if [ "${BEFORE}" = "${AFTER}" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "merged_sha=${AFTER}" >> "$GITHUB_OUTPUT"
+
+      # ---------- 5. 推送 main 回 fork ----------
+      - name: Push main to fork
+        id: push
+        if: steps.forcepush.outputs.detected != 'true'
+        run: |
+          set -euo pipefail
+          DRY="${{ inputs.dry_run }}"
+          if [ "$DRY" = "true" ]; then
+            echo "dry_run=true，跳过 push main"
+            exit 0
+          fi
+          if [ "${{ steps.merge.outputs.changed }}" = "true" ]; then
+            git push origin "HEAD:${TARGET_BRANCH}"
+            echo "pushed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "main 已是最新，无需 push"
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ---------- 6. 计算版本号并打 tag（已存在则跳过） ----------
+      - name: Create and push version tag
+        id: tag
+        if: steps.forcepush.outputs.detected != 'true'
+        run: |
+          set -euo pipefail
+          COUNT="${{ steps.fetch.outputs.upstream_count }}"
+          UPSTREAM_SHA="${{ steps.fetch.outputs.upstream_sha }}"
+          TAG="v${COUNT}"
+          DRY="${{ inputs.dry_run }}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "created=false" >> "$GITHUB_OUTPUT"
+            {
+              echo ""
+              echo "tag ${TAG} 已存在 -> 跳过（说明本次没有新 commit）"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          git tag -a "${TAG}" \
+            -m "upstream snapshot ${UPSTREAM_REPO}" \
+            -m "upstream-sha: ${UPSTREAM_SHA}" \
+            -m "upstream-commit-count: ${COUNT}" \
+            -m "fork-main-sha: $(git rev-parse HEAD)"
+
+          if [ "$DRY" = "true" ]; then
+            echo "created=false" >> "$GITHUB_OUTPUT"
+            echo "dry_run=true，跳过 tag push"
+          else
+            git push origin "refs/tags/${TAG}"
+            echo "created=true" >> "$GITHUB_OUTPUT"
+            {
+              echo ""
+              echo "已创建并推送 tag：${TAG}（指向 ${UPSTREAM_SHA:0:12}）"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # ---------- 7. 结果汇总 ----------
+      - name: Summary
+        if: always()
+        env:
+          FP: ${{ steps.forcepush.outputs.detected }}
+          CHANGED: ${{ steps.merge.outputs.changed }}
+          TAG_LABEL: ${{ steps.tag.outputs.tag }}
+          CREATED: ${{ steps.tag.outputs.created }}
+        run: |
+          {
+            echo ""
+            echo "## 结果"
+            echo ""
+            echo "| 项目 | 值 |"
+            echo "| --- | --- |"
+            echo "| upstream commit 总数 | ${{ steps.fetch.outputs.upstream_count }} |"
+            echo "| 版本 tag | ${TAG_LABEL:-none} |"
+            echo "| tag 是否新建 | ${CREATED:-false} |"
+            echo "| main 是否变化 | ${CHANGED:-unknown} |"
+            echo "| 检测到 force push | ${FP:-false} |"
+            echo "| 触发方式 | ${{ github.event_name }} |"
+          } >> "$GITHUB_STEP_SUMMARY" || true
+
+      # ---------- 8. 失败时开 Issue 通知（同 label 只保留一个 open Issue） ----------
+      - name: Open or update Issue on failure
+        if: failure()
+        continue-on-error: true
+        env:
+          # gh CLI 需要凭据；开 Issue 用默认 GITHUB_TOKEN 即可（已被授予 issues: write）
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LOCAL_SHA: ${{ steps.fetch.outputs.local_sha }}
+          UPSTREAM_SHA: ${{ steps.fetch.outputs.upstream_sha }}
+          UPSTREAM_COUNT: ${{ steps.fetch.outputs.upstream_count }}
+          FORCE_PUSHED: ${{ steps.forcepush.outputs.detected }}
+        run: |
+          set -uo pipefail
+          REPO="${GITHUB_REPOSITORY}"
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          TITLE="上游同步失败，需要人工介入"
+
+          gh label create sync-conflict --repo "$REPO" --color B60205 --description "upstream 同步失败或冲突，需要人工介入" --force >/dev/null 2>&1 || true
+
+          BODY="$(printf '%s\n' \
+            "自动同步 ${UPSTREAM_REPO} 到本 fork 时失败，已停止，未做任何推送。" \
+            "" \
+            "| 项目 | 值 |" \
+            "| --- | --- |" \
+            "| fork main | ${LOCAL_SHA:-unknown} |" \
+            "| upstream/main | ${UPSTREAM_SHA:-unknown} |" \
+            "| upstream commit 总数 | ${UPSTREAM_COUNT:-unknown} |" \
+            "| 检测到 force push | ${FORCE_PUSHED:-unknown} |" \
+            "| 运行日志 | ${RUN_URL} |" \
+            "" \
+            "### 可能原因" \
+            "1. 上游 force push：upstream/main 历史被改写（见上表 force push 字段）" \
+            "2. 合并冲突：本地提交与上游改动冲突" \
+            "3. 权限问题：SYNC_TOKEN 缺失，或未授予 workflow 权限" \
+            "" \
+            "### 处理方式" \
+            "git fetch upstream" \
+            "git log --oneline --left-right main...upstream/main   # 查看差异" \
+            "# 若确认要完全对齐上游（丢弃 fork 本地提交）：" \
+            "git checkout main && git reset --hard upstream/main && git push --force-with-lease origin main" \
+            "# 若只是权限问题：检查 Settings -> Secrets and variables -> Actions 里的 SYNC_TOKEN" \
+            "" \
+            "处理完可手动重跑：Actions -> Sync upstream + auto tag -> Run workflow")"
+
+          EXISTING="$(gh issue list --repo "$REPO" --state open --label sync-conflict --json number --jq '.[0].number // empty' 2>/dev/null || true)"
+
+          if [ -z "$EXISTING" ]; then
+            gh issue create --repo "$REPO" --title "$TITLE" --label sync-conflict --body "$BODY"
+          else
+            gh issue comment "$EXISTING" --repo "$REPO" --body "$BODY"
+          fi
