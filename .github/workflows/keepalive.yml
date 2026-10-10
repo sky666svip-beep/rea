@@ -1,0 +1,60 @@
+# =============================================================================
+# 保活：GitHub 会在仓库「60 天无活动」后自动禁用 schedule 触发的 workflow。
+#
+# 本 workflow 每半月（1 日、15 日）向独立的 keepalive 分支推一次提交，
+# 让仓库始终有活动，从而保证 sync-upstream.yml 的每日定时同步不被停用。
+#
+# 注意：刻意推到独立分支 keepalive，而不是 main ——
+#       main 必须与 upstream 保持一致，任何额外提交都会让同步判定为「已分叉」。
+# =============================================================================
+name: Keepalive
+
+on:
+  schedule:
+    # 每月 1 日和 15 日 UTC 05:00（北京时间 13:00），远小于 60 天阈值
+    - cron: "0 5 1,15 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: keepalive
+  cancel-in-progress: false
+
+jobs:
+  keepalive:
+    name: Keep repository active
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Push keepalive marker to dedicated branch
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # 使用孤立分支，只保留单个提交，避免历史膨胀
+          git checkout --orphan keepalive-work
+          git rm -rf . >/dev/null 2>&1 || true
+
+          {
+            echo "# Keepalive marker"
+            echo ""
+            echo "本文件由 .github/workflows/keepalive.yml 自动更新。"
+            echo ""
+            echo "作用：保持仓库有活动，防止 GitHub 在 60 天无活动后自动禁用定时同步。"
+            echo ""
+            echo "- last_keepalive: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > KEEPALIVE.md
+
+          git add KEEPALIVE.md
+          git commit -m "chore(keepalive): $(date -u +%Y-%m-%d)"
+          git push --force origin HEAD:refs/heads/keepalive
+
+          echo "keepalive 分支已更新" >> "$GITHUB_STEP_SUMMARY"
