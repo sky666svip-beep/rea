@@ -1,6 +1,7 @@
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { STDIO_DEFAULT_MAX_BUFFER_SIZE } from "@modelcontextprotocol/server";
 import { afterEach, expect, it, vi } from "vitest";
+import { z } from "zod";
 
 import { createAnalysisExecution } from "../../src/application/AnalysisProvider.js";
 import { AnalysisInputError } from "../../src/domain/analysisErrorCore.js";
@@ -51,13 +52,19 @@ it("keeps independent server budgets for successful results and oversized errors
   };
 
   vi.stubEnv("REA_MCP_MAX_RESPONSE_BYTES", String(largeBudget));
-  const small = createServer(analysis, undefined, {
-    environment: smallEnvironment,
-  });
+  const small = createServer(
+    { kind: "fixed", analysis },
+    {
+      environment: smallEnvironment,
+    },
+  );
   vi.stubEnv("REA_MCP_MAX_RESPONSE_BYTES", String(smallBudget));
-  const large = createServer(analysis, undefined, {
-    environment: largeEnvironment,
-  });
+  const large = createServer(
+    { kind: "fixed", analysis },
+    {
+      environment: largeEnvironment,
+    },
+  );
   smallEnvironment.REA_MCP_MAX_RESPONSE_BYTES = "invalid-after-selection";
   largeEnvironment.REA_MCP_MAX_RESPONSE_BYTES = String(smallBudget);
   vi.stubEnv("REA_MCP_MAX_RESPONSE_BYTES", "invalid-ambient-after-selection");
@@ -67,16 +74,19 @@ it("keeps independent server budgets for successful results and oversized errors
     Math.ceil((smallBudget + 65536) / 17),
   );
   for (const server of [small, large])
-    server.registerTool("selected_failure", { inputSchema: {} }, async () =>
-      server.delivery.toErrorToolResult(
-        new AnalysisInputError("fixture", undefined, [
-          {
-            path: ["procedure"],
-            reason: "invalid_value",
-            message: diagnostic,
-          },
-        ]),
-      ),
+    server.registerTool(
+      "selected_failure",
+      { inputSchema: z.object({}) },
+      async () =>
+        server.delivery.toErrorToolResult(
+          new AnalysisInputError("fixture", undefined, [
+            {
+              path: ["procedure"],
+              reason: "invalid_value",
+              message: diagnostic,
+            },
+          ]),
+        ),
     );
 
   const [smallClient, largeClient] = await Promise.all([
@@ -161,12 +171,12 @@ it("snapshots the runtime-selected environment before optional loading and reuse
       selected.REA_BROWSER_EXECUTABLE = "/mutated/browser";
       return {};
     },
-    createServer: (analysis, session, options) => {
+    createServer: (source, options) => {
       expect(options?.environment?.REA_BROWSER_EXECUTABLE).toBe(
         "/selected/browser",
       );
       expect(Object.isFrozen(options?.environment)).toBe(true);
-      const server = createServer(analysis, session, options);
+      const server = createServer(source, options);
       observed.push(server);
       return server;
     },

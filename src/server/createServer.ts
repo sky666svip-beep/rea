@@ -15,9 +15,13 @@ import {
   type ToolResultDelivery,
 } from "./toolResult.js";
 import { parseMcpResponseBudget } from "../config/mcpResponseBudget.js";
+import {
+  COMPACT_INPUT_SCHEMA_BUDGET_BYTES,
+  parseMcpInputSchemaProfile,
+} from "../config/mcpInputSchemaProfile.js";
+import type { CompactInputSchemaPresentation } from "./EvidenceMcpServer.js";
 import { isAbsolute } from "node:path";
 
-import type { AnalysisOperationPort } from "../application/AnalysisProvider.js";
 import type { BinarySessionPort } from "../application/binary/BinarySessionPort.js";
 import type { BrowserObservationPort } from "../application/BrowserObservationPort.js";
 import type { BrowserScenarioCapturePort } from "../application/BrowserScenarioCapturePort.js";
@@ -62,12 +66,18 @@ import { AndroidAnalysisService } from "../application/android/AndroidAnalysisSe
 import type { AndroidAnalysisPort } from "../application/android/AndroidAnalysisPort.js";
 import { createAndroidAnalysisProvider } from "../composition/android.js";
 import { registerManagedWorkflowTools } from "./registerManagedWorkflowTools.js";
-import { registerNativeTools } from "./registerNativeTools.js";
+import { NATIVE_TOOL_CONTRACTS } from "../contracts/native/nativeToolContracts.js";
+import { registerEvidenceTools } from "./registerEvidenceTools.js";
 import { registerOfficialTools } from "./registerOfficialTools.js";
 import { registerGuidedPrompts } from "./registerPrompts.js";
 import { registerSessionTools } from "./registerSessionTools.js";
 import type { AvailabilityPolicy } from "../application/CapabilityInventory.js";
 import { sessionAvailabilityPolicy } from "./sessionAvailabilityPolicy.js";
+import {
+  withAdmittedAnalysis,
+  type ServerAnalysisSource,
+} from "./analysisAdmission.js";
+import type { WithAdmittedAnalysis } from "./analysisAdmission.js";
 
 const TARGET_FREE_INSTRUCTIONS =
   "REA provides reverse-engineering tools for local artifacts, native binaries, managed code, browser pages, and runtimes. Use the tool that directly answers the question; discover targets or inspect inventory only when needed. Tool results include inline Evidence and report their coverage and limitations.";
@@ -143,6 +153,7 @@ const installSessionToolAvailability = (
 const createMcpServer = (
   session: BinarySessionPort | undefined,
   delivery: ToolResultDelivery,
+  compactPresentation: CompactInputSchemaPresentation | undefined,
 ): EvidenceMcpServer =>
   new EvidenceMcpServer(
     {
@@ -160,6 +171,7 @@ const createMcpServer = (
       ? undefined
       : (evidence) => session.recordEvidence(evidence),
     delivery,
+    compactPresentation,
   );
 
 /**
@@ -168,16 +180,21 @@ const createMcpServer = (
  * fixed-target seam used by focused tests and embedders.
  */
 export const createServer = (
-  analysis: AnalysisOperationPort,
-  session?: BinarySessionPort,
+  source: ServerAnalysisSource,
   options: CreateServerOptions = {},
 ): EvidenceMcpServer => {
+  const session = source.kind === "session" ? source.session : undefined;
+  const analysis = source.kind === "session" ? source.session : source.analysis;
   const environment = snapshotEnvironment(options.environment ?? process.env);
   const delivery = selectToolResultDelivery(environment, options.delivery);
   const selectedOptions = { ...options, environment, delivery };
   const startedAt = new Date().toISOString();
   const logger = options.logger ?? silentLogger;
-  const server = createMcpServer(session, delivery);
+  const server = createMcpServer(
+    session,
+    delivery,
+    selectCompactInputSchemaPresentation(environment),
+  );
   const android =
     options.androidAnalysis ?? createAndroidAnalysisProvider(environment);
   const availability = installSessionToolAvailability(
@@ -194,7 +211,6 @@ export const createServer = (
   } = createSessionRecorders(server, session);
   const toolContext: ServerToolContext = {
     server,
-    analysis,
     session,
     options: selectedOptions,
     environment,
@@ -203,6 +219,7 @@ export const createServer = (
     activeTarget,
     recordEvidence,
     recordEvidenceWithUnknown,
+    withAdmittedAnalysis: withAdmittedAnalysis(source),
   };
   registerBinaryAnalysisTools(toolContext);
   const previousOnclose = server.server.onclose;
@@ -248,6 +265,18 @@ const selectToolResultDelivery = (
   );
   if (!configured.ok) throw configured.error;
   return createToolResultDelivery(configured.value);
+};
+
+const selectCompactInputSchemaPresentation = (
+  environment: Readonly<NodeJS.ProcessEnv>,
+): CompactInputSchemaPresentation | undefined => {
+  const configured = parseMcpInputSchemaProfile(
+    environment.REA_MCP_INPUT_SCHEMA_PROFILE,
+  );
+  if (!configured.ok) throw configured.error;
+  return configured.value === "compact"
+    ? { budgetBytes: COMPACT_INPUT_SCHEMA_BUDGET_BYTES }
+    : undefined;
 };
 
 const registerConfiguredAnalysisTools = (
@@ -344,39 +373,34 @@ const createSessionRecorders = (
   recordEvidence:
     session === undefined
       ? undefined
-      : (evidence: Parameters<typeof session.recordEvidence>[0]) => {
-          const recorded = session.recordEvidence(evidence);
-          return recorded;
-        },
+      : (evidence: Parameters<typeof session.recordEvidence>[0]) =>
+          session.recordEvidence(evidence),
   recordEvidenceWithUnknown:
     session === undefined
       ? undefined
       : (
           evidence: Parameters<typeof session.recordEvidenceWithUnknown>[0],
           input: Parameters<typeof session.recordEvidenceWithUnknown>[1],
-        ) => {
-          const recorded = session.recordEvidenceWithUnknown(evidence, input);
-          return recorded;
-        },
+        ) => session.recordEvidenceWithUnknown(evidence, input),
 });
 
 interface ServerToolContext extends ReturnType<typeof createSessionRecorders> {
   readonly server: EvidenceMcpServer;
-  readonly analysis: AnalysisOperationPort;
   readonly session: BinarySessionPort | undefined;
   readonly options: CreateServerOptions;
   readonly environment: Readonly<NodeJS.ProcessEnv>;
   readonly logger: Logger;
+  readonly withAdmittedAnalysis: WithAdmittedAnalysis;
 }
 
 const registerBinaryAnalysisTools = ({
   server,
-  analysis,
   session,
   logger,
   activeTarget,
   recordEvidence,
   recordEvidenceWithUnknown,
+  withAdmittedAnalysis,
 }: ServerToolContext): void => {
   const recordUnknown =
     session === undefined
@@ -388,9 +412,10 @@ const registerBinaryAnalysisTools = ({
     activeTarget,
     recordEvidence,
     recordUnknown,
+    withAdmittedAnalysis,
   };
-  registerOfficialTools(server, analysis, analysisOptions);
-  registerEnhancedTools(server, analysis, {
+  registerOfficialTools(server, analysisOptions);
+  registerEnhancedTools(server, {
     ...analysisOptions,
     analysisProfile:
       session === undefined ? undefined : () => session.analysisProfile(),
@@ -403,15 +428,15 @@ const registerBinaryAnalysisTools = ({
         ? undefined
         : (input) => session.recordWorkflowSnapshot(input),
   });
-  const evidenceOptions = { logger, activeTarget, recordEvidence };
-  registerNativeTools(server, analysis, evidenceOptions);
-  registerArtifactTools(server, analysis, {
-    ...evidenceOptions,
-  });
-  registerManagedTools(server, analysis, {
-    ...evidenceOptions,
-    session,
-  });
+  const evidenceOptions = {
+    logger,
+    activeTarget,
+    recordEvidence,
+    withAdmittedAnalysis,
+  };
+  registerEvidenceTools(server, NATIVE_TOOL_CONTRACTS, evidenceOptions);
+  registerArtifactTools(server, evidenceOptions);
+  registerManagedTools(server, evidenceOptions);
   if (session !== undefined)
     registerManagedWorkflowTools(server, {
       logger,

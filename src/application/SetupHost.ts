@@ -14,8 +14,13 @@ import {
   systemLinuxHopperInstallHost,
 } from "./LinuxHopper.js";
 import { installMacHopper, systemMacHopperInstallHost } from "./MacHopper.js";
-import { supportedClients, type SetupClient } from "./SupportedClients.js";
 import {
+  clientEvidencePaths,
+  supportedClients,
+  type SetupClient,
+} from "./SupportedClients.js";
+import {
+  skillDestinations,
   canonicalSkillNeedsInstall,
   installCanonicalSkill,
 } from "./SetupSkill.js";
@@ -78,7 +83,7 @@ export const hostRemediation = async (
       : undefined;
   }
   if ((await host.linuxDistribution())?.supported === true) return undefined;
-  return "Automated Hopper setup supports Ubuntu 24.04+, Fedora 41+, 64-bit Arch Linux, and CachyOS; configure an existing supported provider instead.";
+  return "Automated Hopper setup supports Ubuntu 24.04+, Fedora 41+, Nobara 44+, 64-bit Arch Linux, and CachyOS; configure an existing supported provider instead.";
 };
 
 /** Production setup effects for Hopper, agent configuration, and the canonical skill directory. */
@@ -92,6 +97,8 @@ export const systemSetupHost = (
   return {
     platform,
     homeDirectory,
+    skillDestinations: (clientIds) =>
+      skillDestinations(homeDirectory, clientIds, environment, platform),
     registrationCommand: setupRegistrationCommand(
       platform,
       environment.npm_command === "exec",
@@ -143,8 +150,15 @@ export const systemSetupHost = (
             (aligned) => !aligned,
           ),
     inspectClientConfiguration: inspectClientConfiguration,
-    skillNeedsInstall: () => canonicalSkillNeedsInstall(homeDirectory),
-    installSkill: () => installCanonicalSkill(homeDirectory),
+    skillNeedsInstall: (clientIds) =>
+      canonicalSkillNeedsInstall(
+        homeDirectory,
+        clientIds,
+        environment,
+        platform,
+      ),
+    installSkill: (clientIds) =>
+      installCanonicalSkill(homeDirectory, clientIds, environment, platform),
     doctor: (scope) => runDoctor(undefined, doctorHost, scope),
   };
 };
@@ -157,17 +171,20 @@ export const detectClients = async (
 ): Promise<readonly SetupClient[]> => {
   const detected: SetupClient[] = [];
   for (const candidate of supportedClients(home, platform, environment)) {
-    const [hasConfig, hasMarker] = await Promise.all([
-      exists(candidate.configPath),
-      candidate.markerPath === undefined ? false : exists(candidate.markerPath),
-    ]);
-    if (hasConfig || hasMarker) detected.push(candidate);
+    if (candidate.configPathError !== undefined) continue;
+    if (await clientEvidencePresent(candidate)) detected.push(candidate);
   }
   return detected;
 };
 
 const major = (version: string): number =>
   Number.parseInt(version.split(".")[0] ?? "0", 10);
+const clientEvidencePresent = async (client: SetupClient): Promise<boolean> => {
+  for (const path of clientEvidencePaths(client))
+    if (await exists(path)) return true;
+  return false;
+};
+
 const exists = async (path: string): Promise<boolean> => {
   try {
     await access(path);

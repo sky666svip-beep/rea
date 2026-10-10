@@ -90,24 +90,20 @@ const registerProcessTools = ({
     toolRegistrationOptions(captureContract),
     async (input, context) => {
       const progress = mcpProgressReporter(context);
-      await progress.report({
-        phase: captureContract.name,
-        completed: 0,
-        total: 1,
-        message: "started",
-      });
       const captured = await logToolExecution(
         logger,
         captureContract.name,
-        () => captureProcessScenario(input, context.mcpReq.signal),
+        () =>
+          captureProcessScenario(
+            input,
+            context.mcpReq.signal,
+            process.platform,
+            process.env,
+            undefined,
+            undefined,
+            progress,
+          ),
       );
-      await progress.report({
-        phase: captureContract.name,
-        completed: 1,
-        total: 1,
-        message: captured.ok ? "completed" : "failed",
-        terminal: true,
-      });
       if (!captured.ok)
         return server.delivery.toCallToolResult(captured, captureContract);
       const evidence = createProcessCaptureEvidence(input, captured.value);
@@ -232,20 +228,36 @@ const registerContextTools = (
     navigationContract.name,
     toolRegistrationOptions(navigationContract),
     async (input, context) => {
-      return server.delivery.toCallToolResult(
-        await getNavigationContext(session, input, context.mcpReq.signal),
-        navigationContract,
+      const admitted = await session.withAdmittedAnalysis(
+        navigationContract.name,
+        context.mcpReq.signal,
+        async (analysis) =>
+          server.delivery.toCallToolResult(
+            await getNavigationContext(analysis, input, context.mcpReq.signal),
+            navigationContract,
+          ),
       );
+      return admitted.ok
+        ? admitted.value
+        : server.delivery.toCallToolResult(admitted, navigationContract);
     },
   );
   server.registerTool(
     addressContract.name,
     toolRegistrationOptions(addressContract),
     async (input, context) => {
-      return server.delivery.toCallToolResult(
-        await inspectAddressContext(session, input, context.mcpReq.signal),
-        addressContract,
+      const admitted = await session.withAdmittedAnalysis(
+        addressContract.name,
+        context.mcpReq.signal,
+        async (analysis) =>
+          server.delivery.toCallToolResult(
+            await inspectAddressContext(analysis, input, context.mcpReq.signal),
+            addressContract,
+          ),
       );
+      return admitted.ok
+        ? admitted.value
+        : server.delivery.toCallToolResult(admitted, addressContract);
     },
   );
 };

@@ -33,13 +33,10 @@ import type { JsonValue } from "../domain/jsonValue.js";
 import { interfaceBuilderLimitsSchema } from "../domain/apple/interfaceBuilderGraph.js";
 import { err, ok, type Result } from "../domain/result.js";
 import { ArtifactReaderFailure } from "./ArtifactReader.js";
-import {
-  ARTIFACT_PROVIDER_IDENTITY as IDENTITY,
-  artifactCapabilities,
-} from "./ArtifactProviderMetadata.js";
+import { artifactCapabilities } from "./ArtifactProviderMetadata.js";
+import { ARTIFACT_GRAPH_PROVIDER } from "../application/InvestigationProviders.js";
 import { createEvidence } from "../domain/evidence.js";
 import { createArtifactInspection } from "../domain/artifactInspection.js";
-import { resolveArtifactIntegrityPolicy } from "./inventory/policy.js";
 
 /** Read-only inventory and exclusively owned extraction provider. */
 export class ArtifactProvider implements AnalysisProvider {
@@ -57,7 +54,7 @@ export class ArtifactProvider implements AnalysisProvider {
   }
 
   identity(): ProviderIdentity {
-    return IDENTITY;
+    return ARTIFACT_GRAPH_PROVIDER;
   }
 
   capabilities(): readonly CapabilityDescriptor[] {
@@ -82,11 +79,11 @@ class ArtifactClient implements AnalysisClient {
     options?: ExecutionOptions,
   ) {
     if (operation === "health")
-      return ok(createAnalysisExecution(null, IDENTITY));
+      return ok(createAnalysisExecution(null, ARTIFACT_GRAPH_PROVIDER));
     if (!isArtifactOperation(operation))
       return err(
         new AnalysisCapabilityUnavailableError(
-          IDENTITY.id,
+          ARTIFACT_GRAPH_PROVIDER.id,
           operation,
           "Operation is not implemented by artifact graph provider.",
         ),
@@ -114,7 +111,7 @@ class ArtifactClient implements AnalysisClient {
           ...(options?.signal === undefined ? {} : { signal: options.signal }),
         });
         return ok(
-          createAnalysisExecution(result, IDENTITY, {
+          createAnalysisExecution(result, ARTIFACT_GRAPH_PROVIDER, {
             limitations: result.limitations,
             locations: result.documents.map(({ relative_path: path }) => ({
               kind: "artifact-path" as const,
@@ -167,7 +164,7 @@ class ArtifactClient implements AnalysisClient {
             `Active archive digest changed: expected ${this.target.sha256}, observed ${result.archive_sha256}`,
           );
         return ok(
-          createAnalysisExecution(result, IDENTITY, {
+          createAnalysisExecution(result, ARTIFACT_GRAPH_PROVIDER, {
             limitations: result.limitations,
             locations: [{ kind: "artifact-path", path: result.archive_path }],
           }),
@@ -190,34 +187,30 @@ class ArtifactClient implements AnalysisClient {
           options?.signal,
         );
         return ok(
-          createAnalysisExecution(result, IDENTITY, {
+          createAnalysisExecution(result, ARTIFACT_GRAPH_PROVIDER, {
             rawResult: null,
             limitations: result.limitations,
             subject: subjectFor(
               this.target.sourcePath ?? this.target.path,
               result.manifest,
             ),
-            locations: result.artifacts.map(({ relative_path: path }) => ({
-              kind: "artifact-path" as const,
-              path,
-            })),
+            // Each extracted file's path is already in artifacts.
+            locations: [],
           }),
         );
       }
       const parsed = artifactInventoryInputSchema.parse(parameters);
       const result = await this.inventory(parsed, options);
       return ok(
-        createAnalysisExecution(result, IDENTITY, {
+        createAnalysisExecution(result, ARTIFACT_GRAPH_PROVIDER, {
           rawResult: null,
           limitations: result.limitations,
           subject: subjectFor(
             this.target.sourcePath ?? this.target.path,
             result.manifest,
           ),
-          locations: result.occurrences.map(({ logical_path: path }) => ({
-            kind: "artifact-path" as const,
-            path,
-          })),
+          // Each occurrence's logical path is already in the result.
+          locations: [],
         }),
       );
     } catch (cause: unknown) {
@@ -263,7 +256,7 @@ class ArtifactClient implements AnalysisClient {
       ...(options?.signal === undefined ? {} : { signal: options.signal }),
     });
     return ok(
-      createAnalysisExecution(result, IDENTITY, {
+      createAnalysisExecution(result, ARTIFACT_GRAPH_PROVIDER, {
         limitations: result.limitations,
         locations: result.catalogs.map(({ path }) => ({
           kind: "artifact-path" as const,
@@ -297,7 +290,7 @@ class ArtifactClient implements AnalysisClient {
       ...(options?.signal === undefined ? {} : { signal: options.signal }),
     });
     return ok(
-      createAnalysisExecution(result, IDENTITY, {
+      createAnalysisExecution(result, ARTIFACT_GRAPH_PROVIDER, {
         limitations: result.limitations,
         locations: result.images.map(({ path }) => ({
           kind: "artifact-path" as const,
@@ -326,17 +319,14 @@ class ArtifactClient implements AnalysisClient {
       this.target.sourcePath ?? this.target.path,
       inventory.manifest,
     );
-    const locations = inventory.occurrences.map(({ logical_path: path }) => ({
-      kind: "artifact-path" as const,
-      path,
-    }));
-    const inventoryEvidence = createEvidence(subject, IDENTITY, {
+    const inventoryEvidence = createEvidence(subject, ARTIFACT_GRAPH_PROVIDER, {
       operation: "inventory_artifact",
       parameters: inventoryParameters,
       result: inventory,
       rawResult: null,
       limitations: inventory.limitations,
-      locations,
+      // The nested inventory already names every occurrence's logical path.
+      locations: [],
     });
     const result = createArtifactInspection(inventoryEvidence);
     await options?.progress?.report({
@@ -346,11 +336,11 @@ class ArtifactClient implements AnalysisClient {
       message: "inventory substep completed",
     });
     return ok(
-      createAnalysisExecution(result, IDENTITY, {
+      createAnalysisExecution(result, ARTIFACT_GRAPH_PROVIDER, {
         rawResult: null,
         limitations: result.limitations,
         subject,
-        locations,
+        locations: [],
       }),
     );
   }
@@ -364,9 +354,7 @@ class ArtifactClient implements AnalysisClient {
     return inventoryArtifact(this.target.sourcePath ?? this.target.path, {
       environment: this.environment,
       ...(options?.signal === undefined ? {} : { signal: options.signal }),
-      integrity: resolveArtifactIntegrityPolicy({
-        mode: parsed.integrity_policy,
-      }),
+      integrity: { mode: parsed.integrity_policy },
     });
   }
 }

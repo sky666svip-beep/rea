@@ -1,3 +1,4 @@
+import { skillDestinations } from "./SetupSkill.js";
 import {
   type ClientConfigurationInspection,
   type ClientConfigurationResult,
@@ -18,6 +19,9 @@ import { setupRegistrationCommand } from "./SetupHost.js";
 export class FakeSetupHost implements SetupHost {
   readonly platform: NodeJS.Platform;
   readonly homeDirectory = "/fixture/home";
+  skillDestinations(clientIds: readonly string[]) {
+    return skillDestinations(this.homeDirectory, clientIds);
+  }
   readonly registrationCommand: readonly string[];
   nodeVersion = "24.18.0";
   version: string | undefined = "14.5";
@@ -186,7 +190,6 @@ export class FakeSetupHost implements SetupHost {
         skill: {
           installed_version: null,
           installed_tool_count: null,
-          installed_catalog_digest: null,
           state: this.skill === "unchanged" ? "aligned" : "missing",
           remediation: null,
         },
