@@ -11,17 +11,18 @@ import {
   serializeClientConfiguration,
   withClientServers,
   type ClientConfigurationDocument,
-  type ClientRegistrationDialect,
 } from "./ClientConfigurationDocument.js";
 import { constants as fsConstants } from "node:fs";
-import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import writeFileAtomic from "write-file-atomic";
+import { clientRegistrationEnvironment } from "./ClientRegistrationEnvironment.js";
 
 import { PRODUCT_IDENTITY } from "../identity.js";
 import { npxRegistrationCommand } from "./ClientRegistrationIdentity.js";
 import { MCP_STARTUP_POLICY } from "../mcpStartupPolicy.js";
 import { resolveClientConfigTransactionPath } from "./ClientConfigPath.js";
+import { readRegularFileText } from "./RegularFileRead.js";
 import type {
   ClientConfigurationInspection,
   ClientConfigurationResult,
@@ -53,7 +54,12 @@ const configureClientDocument = async (
   const policy = await readClientPolicyBlock(
     client,
     undefined,
-    clientConfigurationDesired(client, environment, command, client.format),
+    clientConfigurationDesired(
+      client,
+      environment,
+      command,
+      files.value.at(-1),
+    ),
   );
   if (!policy.ok || policy.value !== undefined)
     return { status: "failed", reason: "readback" };
@@ -64,7 +70,7 @@ const configureClientDocument = async (
     return { status: "failed", reason: "path" };
   let original: string | undefined;
   try {
-    original = await readFile(transactionPath, "utf8");
+    original = await readRegularFileText(transactionPath);
   } catch (cause: unknown) {
     if (!isMissing(cause)) return { status: "failed", reason: "readback" };
   }
@@ -77,7 +83,7 @@ const configureClientDocument = async (
     const policy = await readClientPolicyBlock(
       client,
       parsed,
-      clientConfigurationDesired(client, environment, command, parsed.dialect),
+      clientConfigurationDesired(client, environment, command, parsed),
     );
     if (!policy.ok || policy.value !== undefined)
       return { status: "failed", reason: "readback" };
@@ -90,7 +96,7 @@ const configureClientDocument = async (
     client,
     environment,
     command,
-    parsed.dialect,
+    parsed,
   );
   if (registrationCurrent(parsed, desired)) return { status: "unchanged" };
   const backupPath =
@@ -149,7 +155,7 @@ const configureClientDocument = async (
   }
   try {
     const readback = parseClientConfiguration(
-      await readFile(transactionPath, "utf8"),
+      await readRegularFileText(transactionPath),
       format,
     );
     if (!registrationCurrent(readback, desired)) {
@@ -178,17 +184,12 @@ export const clientConfigurationAligned = async (
   try {
     const files = await readClientConfigurationFiles(client);
     if (!files.ok) return false;
-    const original = await readFile(client.configPath, "utf8");
+    const original = await readRegularFileText(client.configPath);
     const parsed = parseClientConfiguration(original, client.format);
     const policy = await readClientPolicyBlock(
       client,
       parsed,
-      clientConfigurationDesired(
-        client,
-        providerEnvironment,
-        command,
-        parsed.dialect,
-      ),
+      clientConfigurationDesired(client, providerEnvironment, command, parsed),
     );
     return (
       policy.ok &&
@@ -199,7 +200,7 @@ export const clientConfigurationAligned = async (
           client,
           providerEnvironment,
           command,
-          parsed.dialect,
+          parsed,
         ),
       )
     );
@@ -228,7 +229,7 @@ export const inspectClientConfiguration = async (
       client,
       providerEnvironment,
       command,
-      client.format,
+      files.value.at(-1),
     ),
   );
   if (!policy.ok)
@@ -246,7 +247,7 @@ export const inspectClientConfiguration = async (
     };
   let original: string;
   try {
-    original = await readFile(transactionPath, "utf8");
+    original = await readRegularFileText(transactionPath);
   } catch (cause: unknown) {
     if (isMissing(cause)) return { status: "create" };
     return {
@@ -260,12 +261,7 @@ export const inspectClientConfiguration = async (
     const policy = await readClientPolicyBlock(
       client,
       parsed,
-      clientConfigurationDesired(
-        client,
-        providerEnvironment,
-        command,
-        parsed.dialect,
-      ),
+      clientConfigurationDesired(client, providerEnvironment, command, parsed),
     );
     if (!policy.ok)
       return { status: "invalid", remediation: policy.error.detail };
@@ -275,7 +271,7 @@ export const inspectClientConfiguration = async (
       client,
       providerEnvironment,
       command,
-      parsed.dialect,
+      parsed,
     );
     if (registrationCurrent(parsed, desired))
       return { status: "already_current" };
@@ -337,17 +333,20 @@ const clientConfigurationDesired = (
   client: SetupClient,
   providerEnvironment: SetupProviderEnvironment,
   command: readonly string[],
-  format: ClientRegistrationDialect | undefined,
+  parsed?: ClientConfigurationDocument,
 ) => {
-  const environment = Object.fromEntries(
-    Object.entries(providerEnvironment).sort(([left], [right]) =>
-      left.localeCompare(right),
-    ),
+  const format = parsed?.dialect ?? client.format ?? "json";
+  // Preserve explicitly configured server settings, never the ambient process
+  // environment. Newly discovered provider paths win only for their own keys.
+  const environment = clientRegistrationEnvironment(
+    parsed,
+    providerEnvironment,
   );
+  if (!environment.ok) throw environment.error;
   const registration = clientRegistrationEntry(
-    format ?? "json",
+    format,
     command.length === 0 ? [PRODUCT_IDENTITY.cliBinary, "mcp"] : command,
-    environment,
+    environment.value,
   );
   return {
     ...registration,

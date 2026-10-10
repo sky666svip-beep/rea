@@ -2,10 +2,10 @@ import { createHash } from "node:crypto";
 import { setImmediate } from "node:timers/promises";
 
 import { resolveJavaScriptSourceMapReference } from "../../domain/javascript/javascriptSourceMapPaths.js";
-import { analyzeParsedJavaScriptStaticSource } from "../../domain/javascript/javascriptStaticAnalysis.js";
+import { analyzeParsedJavaScriptStaticSourceSteps } from "../../domain/javascript/javascriptStaticAnalysis.js";
 import {
   analyzeParsedJavaScriptSemanticsSteps,
-  classifyParsedJavaScriptOpenReceivers,
+  classifyParsedJavaScriptOpenReceiversSteps,
 } from "../../domain/javascript/javascriptSemanticAnalysis.js";
 import type { JavaScriptSemanticIr } from "../../domain/javascript/javascriptSemanticIr.js";
 import { parseJavaScriptSource } from "../../domain/javascript/javascriptSourceParser.js";
@@ -188,9 +188,9 @@ function* analyzeArtifactFileSteps<
     state.parseFailures += 1;
     return;
   }
-  const openReceiverFacts = classifyParsedJavaScriptOpenReceivers(parsed);
-  yield;
-  const analysis = analyzeParsedJavaScriptStaticSource(
+  const openReceiverFacts =
+    yield* classifyParsedJavaScriptOpenReceiversSteps(parsed);
+  const analysis = yield* analyzeParsedJavaScriptStaticSourceSteps(
     file.text.value,
     parsed,
     openReceiverFacts,
