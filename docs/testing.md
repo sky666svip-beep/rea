@@ -139,8 +139,11 @@ directory, so default OS-home discovery remains unverified. Live model APIs and
 native Windows are also unverified.
 
 `verify:claude-client` requires installed Claude Code (verified with
-`@anthropic-ai/claude-code@2.1.296`); select it with `REA_VERIFY_CLAUDE_COMMAND`.
-The optional POSIX lane uses native `CLAUDE_CONFIG_DIR` discovery, an independent
+`@anthropic-ai/claude-code@2.1.296` on POSIX and native Windows); select it
+with `REA_VERIFY_CLAUDE_COMMAND`. On Windows, select
+`claude.exe`: npm installs put only a `claude.cmd` shim on `PATH`, and the real
+executable is under `node_modules/@anthropic-ai/claude-code/bin`.
+The optional lane uses native `CLAUDE_CONFIG_DIR` discovery, an independent
 Git workspace, user settings and default built-in tools. It preserves caller
 preferences and backups, checks idempotent setup, waits through the native
 `WaitForMcpServers` tool when discovery is pending, and validates the complete
@@ -149,8 +152,8 @@ native `Skill`, checks its full body and verifies named-schema JavaScript Eviden
 for a Unicode path. Use `-- chat` for ordinary chat with REA enabled, or
 `REA_VERIFY_RUNTIME_ROOT` for a production-only installed package. The local
 Anthropic Messages/SSE fixture preserves native resource-hint envelopes in its
-request artifacts. Usage is synthetic; live Anthropic API, native Windows and
-bare-mode personal-skill activation remain unverified by this lane.
+request artifacts. Usage is synthetic; live Anthropic API and bare-mode
+personal-skill activation remain unverified by this lane.
 
 `verify:copilot-client` requires installed GitHub Copilot CLI (verified with
 `@github/copilot@1.0.95`); select it with `REA_VERIFY_COPILOT_COMMAND`.
@@ -279,10 +282,12 @@ establish live DeepSeek API or native Windows coverage. Receipts include
 request artifacts, result digests and owned-process lineage.
 
 Full E2E tests invoke the production command dispatcher and real providers,
-without fake launchers, runners or responses. `verify:keyed-archive` writes an
-actual Foundation binary archive, runs the CLI and a separate stdio MCP
-subprocess, checks parity and pagination, rejects an escaping path and checks
-an XML graph golden. `verify:asset-catalog` compiles source-owned colors with
+without fake launchers, runners or responses. `verify:keyed-archive` writes
+Foundation binary, XML, and integer archives using one run-owned Swift module
+cache. It checks CLI and separate stdio MCP parity, pagination, escaping-path
+rejection, an XML graph golden, and numeric meaning for safe controls, unsafe
+integers, boxed numbers, and integral-valued reals. `verify:asset-catalog`
+compiles source-owned colors with
 `actool`, invokes real `assetutil`, then checks CLI/MCP results, exact catalog
 digest, every raw metadata field, pagination and malformed input rejection.
 Neither artifact workflow requires Hopper or launches it. Both run in macOS CI.
@@ -458,7 +463,7 @@ prove behavior on the verified Ghidra 12.1.4 and JDK 21 build.
 | Ghidra lane                                | Supported runner/target                                                                         | Additional local tools                                              |
 | ------------------------------------------ | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
 | `npm run verify:ghidra`                    | Linux x64/arm64 ELF or macOS x64/arm64 Mach-O                                                   | Host C compiler, Ghidra 12.1.4, and full JDK 21                     |
-| `npm run verify:ghidra:seeds`              | POSIX host; source-owned 32-bit x86 raw fixture; function order and BSS labels                  | Ghidra 12.1.4 and full JDK 21                                       |
+| `npm run verify:ghidra:seeds`              | POSIX; raw x86 fixture; seed ordering, BSS labels, analyzer readback and unknown-name rejection | Ghidra 12.1.4 and full JDK 21                                       |
 | `npm run verify:ghidra:swift`              | macOS x64/arm64 Mach-O                                                                          | Host Swift compiler, Ghidra 12.1.4, and full JDK 21                 |
 | `npm run verify:ghidra:switch`             | Linux x64 ELF; GCC/Clang optimized and stripped switch fixtures                                 | GCC, Clang, GNU nm/objdump/strip, Ghidra 12.1.4, and full JDK 21    |
 | `npm run verify:ghidra:aarch64-jump-table` | Any supported Ghidra host; AArch64 ELF; signed/unsigned byte/halfword tables; host ARM64 Mach-O | Clang with AArch64 target support, Ghidra 12.1.4, and full JDK 21   |
@@ -482,6 +487,13 @@ not require Ghidra or Java. It includes Job Object commit-limit controls (a
 limited child that reaches the limit, a control that does not, and invalid
 limit rejection). An optional independently compiled Windows fixture
 adds in-place reparse, breakaway, environment, and token observations.
+The separate `scripts/verify-windows-native-inspection.mjs` lane uses the
+`.cache/windows-native-inspection-fixture` artifact built on Linux with
+`node scripts/build-windows-native.mjs --inspection-fixture`. Its controlled
+first deletion failure checks retained NTFS ownership, later-query recovery,
+successful-admission caching, and environment-teardown cleanup. It neither
+establishes the cause of the intermittent #1701 host failure nor replaces
+verification with the shipped production artifact.
 `npm run verify:ghidra:windows:package` additionally packs and installs REA into
 an isolated prefix and runs ordinary-user CLI/MCP operations against their
 canonical schemas. Run the controlled fixture generator before that lane, or
@@ -786,6 +798,16 @@ truncation constraint, while leading-zero coordinates still resolve correctly.
 It has the same Ghidra/JDK prerequisites as the MZ lane. Neither lane claims DOS
 runtime or PC-98 device execution.
 
+`npm run verify:ghidra:raw` uses a generated ARM little-endian headerless image
+through the compiled CLI and stdio MCP server. With the same Ghidra/JDK
+prerequisites, it checks preparation and bridge startup, verified load mappings,
+instruction and byte readback, canonical-entry session reuse, replacement when
+the entry changes without `provider_id`, unchanged source bytes, and owned
+cleanup. Six-byte x86 and x86_64 controls also verify supported compiler
+specifications, independent mappings, unchanged bytes, and decompilation of a
+known return value. AArch64 remains covered by deterministic tests rather than
+this real-provider lane. See [raw binary analysis](raw-binary.md).
+
 ## Apple Interface Builder archives
 
 `npm run verify:interface-builder` compiles the source-owned AppKit XIB into a
@@ -927,7 +949,7 @@ behavior, and complete CI evidence before merging.
 | `npm run test:focused -- PATH...` | Exact existing test files; compiled boundaries build first, and unmatched paths fail                                    |
 | `npm run test:changed`            | Source tests affected since the merge base with `origin/main`, including committed and dirty changes                    |
 | `npm run test:fast`               | All domain, service, adapter, composition, conformance, and evaluation tests without build                              |
-| `npm run test:boundary`           | Boundary, MCP boundary, process boundary, and process-global projects                                                   |
+| `npm run test:boundary`           | Boundary, CLI boundary, MCP boundary, process boundary, and process-global projects                                     |
 | `npm run test:mcp`                | MCP boundary project                                                                                                    |
 | `npm run test:acceptance`         | Complete compiled CLI and MCP acceptance workflows                                                                      |
 | `npm run test:watch`              | Dirty source tests in watch mode, without build                                                                         |
@@ -989,11 +1011,18 @@ Vitest projects use up to two workers, bounded by host parallelism.
 `process-boundary` runs later with serial files because process-tree sampling
 shares host resources. Acceptance and process-global cases use isolated forks
 without serial scheduling. Pure domain/service, composition, conformance,
-evaluation, and MCP boundary projects share module graphs; their tests avoid
-process-global state and keep resource cleanup test-scoped. Each MCP session
-still owns its resources. Adapter, non-MCP boundary, acceptance, and
-process-global projects retain per-file isolation. See `vitest.config.ts` for
-current settings.
+evaluation, CLI boundary, and MCP boundary projects share module graphs. Their
+tests avoid process-global state and keep resource cleanup test-scoped. Each
+MCP session still owns its resources, and CLI cases retain fresh command
+instances or subprocesses. CLI module mocks belong in `tests/process-global/`
+so they keep per-file isolation. Product catalog verification stays with the
+isolated filesystem boundary tests because it loads both source and compiled
+module graphs. Adapter, other boundary, acceptance, and process-global projects
+retain per-file isolation. See `vitest.config.ts` for current settings.
+
+The reused CLI boundary workers cap V8 old space at 384 MiB, based on their
+profiled allocation and cleanup behavior. This encourages collection between
+files; spawned REA processes retain their own heap settings.
 
 Vitest worker limits do not bound subprocesses launched within a test. Bound
 those batches separately so repeated CLI validation cannot oversubscribe the
@@ -1357,7 +1386,10 @@ generation. It installs nothing. Without configuration, the default invocation
 reports a named skip; `--require-tools` makes missing configuration fail.
 
 The verifier creates and validates real modules with custom sections, multiple
-import/export kinds, escaped names and empty modules. It compares exact WAT,
+import/export kinds, escaped names, an empty module, and a bulk-memory
+DataCount section. Debug-name fixtures cover compiler-generated module names
+and preserved name-section payloads with empty, multiline, Unicode, long and
+NUL-containing names. It compares exact WAT,
 section output and selected/tool digests through the compiled CLI and real MCP
 SDK, validates advertised schemas, checks identical CLI/MCP Evidence IDs and
 session bundle readback, retains invalid/truncated module diagnostics, preserves

@@ -33,6 +33,8 @@ import type { AnalysisErrorProjection } from "./analysisErrorProjection.js";
 export const analysisErrorRemediationAction = (
   error: AnalysisError,
 ): string => {
+  if (error instanceof EvidenceFileError && error.published !== undefined)
+    return "Use the published file at details.published_path and resolve the reported staging cleanup failure.";
   if (error instanceof AnalysisSnapshotMismatchError)
     return "Run analysis without this snapshot, then save a fresh snapshot using the intended artifact, provider, and analysis profile.";
   if (error instanceof AnalysisUnsupportedTargetError)
@@ -66,7 +68,7 @@ export const analysisErrorRemediationAction = (
   if (error instanceof HopperRemoteError)
     return error.diagnosticType === "invalid_request"
       ? "Correct the reported address, document, or arguments and retry."
-      : "Review the Hopper diagnostic details; correct the request or retry if the failure was transient.";
+      : "Review the Hopper diagnostic details and correct the request or target; run `rea doctor` if the provider itself is failing. Repeating the unchanged request is not expected to succeed.";
   if (error instanceof EvidenceReferenceError)
     return "Use an exact Evidence reference retained by this session, supply the complete inline Evidence, re-run its producer, or import its Evidence bundle. close_binary clears retained records.";
   if (
@@ -156,6 +158,7 @@ const artifactErrorCategory = (
 const STATIC_ERROR_CATEGORIES: Readonly<
   Partial<Record<AnalysisErrorTag, AnalysisErrorProjection["category"]>>
 > = {
+  ConfigurationError: "invalid_input",
   AnalysisInputError: "invalid_input",
   AnalysisAccessDeniedError: "unavailable",
   AnalysisArtifactChangedError: "integrity_mismatch",
@@ -265,9 +268,12 @@ const hopperProcessMessage = (error: HopperProcessError): string => {
   const startup =
     error.userMessage === undefined ? "" : ` ${error.userMessage}`;
   if (error.providerState === "exited") {
+    const signal = error.launcherFailure?.signal;
     const exit =
       error.exitCode === null
-        ? "no exit code was observed"
+        ? signal === undefined || signal === null
+          ? "no exit code was observed"
+          : `signal ${signal}`
         : `exit code ${String(error.exitCode)}`;
     const recovery =
       error.failureCode === undefined && stage !== "launch"
@@ -282,7 +288,7 @@ const hopperProcessMessage = (error: HopperProcessError): string => {
 
 const standardErrorMessage = (tag: AnalysisErrorTag): string | undefined => {
   if (UNREADABLE_OUTPUT_TAGS.has(tag))
-    return "Analysis returned an unreadable result. Retry once; if it continues, run `rea doctor`.";
+    return "Analysis returned an unreadable result. Run `rea doctor` and review the reported details; repeating the unchanged request is not expected to succeed.";
   if (UNSUPPORTED_PROVIDER_TAGS.has(tag))
     return "This analysis is unavailable for the current target. Choose another analysis or target.";
   if (CANCELLED_TAGS.has(tag))
@@ -290,7 +296,7 @@ const standardErrorMessage = (tag: AnalysisErrorTag): string | undefined => {
   if (TIMEOUT_TAGS.has(tag))
     return "Analysis took too long. Try a smaller request, then run `rea doctor` if it continues.";
   if (ADAPTER_FAILURE_TAGS.has(tag))
-    return "Analysis could not complete. Retry once; if it continues, run `rea doctor`.";
+    return "Analysis could not complete. Run `rea doctor` and review the reported details; repeating the unchanged request is not expected to succeed.";
   if (START_FAILURE_TAGS.has(tag))
     return "Analysis could not start or stopped unexpectedly. Run `rea doctor`, then try again.";
   return undefined;
@@ -365,7 +371,10 @@ const artifactMessage = ({
 const evidenceFileMessage = ({
   operation,
   reason,
+  published,
 }: EvidenceFileError): string => {
+  if (published !== undefined)
+    return "The output file was published, but staging cleanup remains incomplete.";
   if (reason === "missing")
     return operation === "read"
       ? "Evidence file does not exist at the selected path. Check the path and try again."
