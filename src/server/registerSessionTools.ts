@@ -13,7 +13,7 @@ import { ProcessCaptureError } from "../process/capture/ProcessCaptureError.js";
 import { toolContract } from "../contracts/toolContracts.js";
 import type { AnalysisSnapshot } from "../domain/analysisSnapshot.js";
 import { UnknownRegistryError } from "../domain/unknownRegistryError.js";
-import { type AnalysisError } from "../domain/analysisErrorBase.js";
+import type { AnalysisError } from "../domain/analysisErrorBase.js";
 import type { Evidence } from "../domain/evidence.js";
 import type { ProcessCapture } from "../domain/process/processCaptureParsing.js";
 import { err, ok, type Result } from "../domain/result.js";
@@ -191,7 +191,10 @@ const registerOpenLifecycleTool = ({
     async (input, context) => {
       let snapshot: AnalysisSnapshot | undefined;
       if (input.snapshot_path !== undefined) {
-        const loaded = await readAnalysisSnapshot(input.snapshot_path);
+        const loaded = await readAnalysisSnapshot(
+          input.snapshot_path,
+          context.mcpReq.signal,
+        );
         if (!loaded.ok)
           return server.delivery.toCallToolResult(loaded, openContract);
         snapshot = loaded.value;

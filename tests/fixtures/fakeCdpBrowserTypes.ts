@@ -89,8 +89,11 @@ export interface FakeOptions {
   readonly responseAfterMalformedUrl?: string;
   readonly unrelatedWorker?: boolean;
   readonly binaryWebSocketEvent?: boolean;
+  /** Emit an allowed WebSocket creation without any frames in the capture window. */
+  readonly webSocketWithoutFrames?: boolean;
   readonly invalidBinaryWebSocketEvent?: boolean;
   readonly sourceMapBody?: string;
+  readonly sourceMapRedirect?: string;
   readonly sessionTimeline?:
     | "same_origin"
     | "outside_policy"

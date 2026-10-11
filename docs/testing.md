@@ -23,6 +23,11 @@ cases. Share setup without hiding inputs or expected evidence. For successful
 `.ok` assertion adds no coverage. Protocol fixtures must reject unmodeled
 commands and preserve actual producer reply shapes.
 
+Stateless source-analysis matrices may share a file-owned stdio MCP connection
+and retain representative compiled CLI parity checks. Every distinct source
+scenario still runs through the public workflow; session-lifecycle scenarios
+need their own sessions and cleanup assertions.
+
 Report unavailable authority as a named skip. Await owned cleanup before a
 verifier reports success. Native process inspectors are released at Vitest
 worker teardown; fork termination does not run Node exit hooks, and per-file
@@ -160,8 +165,25 @@ Use `-- chat` for ordinary
 chat or `REA_VERIFY_RUNTIME_ROOT` for a production-only installed package.
 The native offline BYOK adapter uses a loopback OpenAI completions/SSE fixture
 and `gpt-5.4` model metadata; model inference and token usage are synthetic.
-Set `REA_VERIFY_COPILOT_MODEL` to examine another model configuration. In the
-verified client, `gpt-4.1` blocks the full input-schema profile before HTTP with
+Set `REA_VERIFY_COPILOT_MODEL` to examine another client model ID and
+`REA_VERIFY_COPILOT_WIRE_MODEL` for its backend model name (defaults to the client
+ID). Every actual HTTP request's model is checked and recorded separately.
+Both `HOME` and `USERPROFILE` point to the disposable account; native `skill add`
+still selects the installed skill directory explicitly.
+
+The same native client passed full-profile chat and analysis with the actual
+wire model `gpt-4.1` under a distinct BYOK model ID:
+
+```bash
+REA_VERIFY_COPILOT_MODEL=rea-gpt-4.1 REA_VERIFY_COPILOT_WIRE_MODEL=gpt-4.1 npm run verify:copilot-client -- chat
+REA_VERIFY_COPILOT_MODEL=rea-gpt-4.1 REA_VERIFY_COPILOT_WIRE_MODEL=gpt-4.1 npm run verify:copilot-client -- call
+```
+
+These runs retain full canonical input/output schemas, all tools, installed-skill
+loading and complete Evidence readback. They use the fixture's requested
+one-million-token BYOK prompt setting; effective capacity and live API acceptance
+remain unknown. With the built-in `gpt-4.1` model ID, the verified client still
+blocks the full input-schema profile before HTTP with
 `compaction_static_context_blocked`, even when requesting a larger BYOK prompt
 capacity. The effective capacity is unknown. The default verifier preserves
 the complete catalog and full schemas. To verify the existing compact profile:
@@ -374,6 +396,12 @@ regressions until a real fixture establishes equivalent coverage.
 
 `verify:browser` exercises source-map failure isolation and expanded-output limits through the compiled CLI and stdio MCP with real Chrome. It also submits five 2 MiB source-map annotations, checks retained script identities and explicit map omissions, and closes its owned fixture target. Replacement and document-reset behavior has separate producer-boundary coverage.
 
+The raw Chrome fixture launchers use `--password-store=basic` so Linux startup
+does not wait for an unlock prompt from a reachable but locked desktop keyring.
+Such a stall leaves the initial page unloaded with empty or placeholder CDP URLs;
+it does not establish permission to capture that page. See
+[the keyring diagnosis](https://github.com/morluto/rea/issues/1384#issuecomment-6093781686).
+
 `verify:browser` also captures a source-owned noise canvas as a real PNG above
 8 MiB through the CLI and stdio MCP, with complete byte/digest parity and real PNG
 decoding. Its SDK client explicitly permits the larger inline JSON response;
@@ -427,14 +455,15 @@ installation (`application.java.min` through `application.java.max`). Current
 12.1 releases require JDK 21 or newer and set no maximum. The lanes below still
 prove behavior on the verified Ghidra 12.1.4 and JDK 21 build.
 
-| Ghidra lane                                | Supported runner/target                                                            | Additional local tools                                              |
-| ------------------------------------------ | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `npm run verify:ghidra`                    | Linux x64/arm64 ELF or macOS x64/arm64 Mach-O                                      | Host C compiler, Ghidra 12.1.4, and full JDK 21                     |
-| `npm run verify:ghidra:swift`              | macOS x64/arm64 Mach-O                                                             | Host Swift compiler, Ghidra 12.1.4, and full JDK 21                 |
-| `npm run verify:ghidra:switch`             | Linux x64 ELF; GCC/Clang optimized and stripped switch fixtures                    | GCC, Clang, GNU nm/objdump/strip, Ghidra 12.1.4, and full JDK 21    |
-| `npm run verify:ghidra:aarch64-jump-table` | Any supported Ghidra host; AArch64 ELF; byte/halfword tables; host ARM64 Mach-O    | Clang with AArch64 target support, Ghidra 12.1.4, and full JDK 21   |
-| `npm run verify:ghidra:cross-format`       | Any supported Ghidra host; also analyzes AArch64 ELF, x86-64 PE, and x86-64 Mach-O | `clang`, LLD, and `lld-link` in addition to host-lane prerequisites |
-| `npm run verify:ghidra:windows`            | Controlled Windows x64 with native x86-64 PE; `-- --x86` selects native x86 PE     | Ghidra 12.1.4, full JDK 21, and the matching native artifact        |
+| Ghidra lane                                | Supported runner/target                                                                         | Additional local tools                                              |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `npm run verify:ghidra`                    | Linux x64/arm64 ELF or macOS x64/arm64 Mach-O                                                   | Host C compiler, Ghidra 12.1.4, and full JDK 21                     |
+| `npm run verify:ghidra:seeds`              | POSIX host; source-owned 32-bit x86 raw fixture; function order and BSS labels                  | Ghidra 12.1.4 and full JDK 21                                       |
+| `npm run verify:ghidra:swift`              | macOS x64/arm64 Mach-O                                                                          | Host Swift compiler, Ghidra 12.1.4, and full JDK 21                 |
+| `npm run verify:ghidra:switch`             | Linux x64 ELF; GCC/Clang optimized and stripped switch fixtures                                 | GCC, Clang, GNU nm/objdump/strip, Ghidra 12.1.4, and full JDK 21    |
+| `npm run verify:ghidra:aarch64-jump-table` | Any supported Ghidra host; AArch64 ELF; signed/unsigned byte/halfword tables; host ARM64 Mach-O | Clang with AArch64 target support, Ghidra 12.1.4, and full JDK 21   |
+| `npm run verify:ghidra:cross-format`       | Any supported Ghidra host; also analyzes AArch64 ELF, x86-64 PE, and x86-64 Mach-O              | `clang`, LLD, and `lld-link` in addition to host-lane prerequisites |
+| `npm run verify:ghidra:windows`            | Controlled Windows x64 with native x86-64 PE; `-- --x86` selects native x86 PE                  | Ghidra 12.1.4, full JDK 21, and the matching native artifact        |
 
 The optional Swift lane compiles a source-owned fixture and checks modern and
 provider-demangled procedure names through real stdio MCP, with and without the
@@ -449,7 +478,9 @@ native decompiler. The namespace verifier reports missing or non-executable
 components before testing the fixture. REA does not build or install them.
 
 Windows native conformance runs with `npm run verify:windows-native` and does
-not require Ghidra or Java. An optional independently compiled Windows fixture
+not require Ghidra or Java. It includes Job Object commit-limit controls (a
+limited child that reaches the limit, a control that does not, and invalid
+limit rejection). An optional independently compiled Windows fixture
 adds in-place reparse, breakaway, environment, and token observations.
 `npm run verify:ghidra:windows:package` additionally packs and installs REA into
 an isolated prefix and runs ordinary-user CLI/MCP operations against their
@@ -595,6 +626,18 @@ remain GUI-only surfaces in JEB 5.48.0 headless.
 Authenticated IPA and macOS application inventory projection is documented in
 [Apple application analysis](apple-application-analysis.md).
 
+`npm run verify:harmony` requires no SDK or engine. It projects the pinned
+harmony-next-pipeline 1.0.1 release HAP from an MIT-licensed source repository,
+fetched by `npm run fixtures:harmony` into ignored
+`_reference/harmony-integration/`, set as `REA_HARMONY_TEST_HAP`.
+The lane exercises `inspect_artifact`, projection determinism, Stage-model
+path hints, exact component sets, signing-entry limitations, and CLI/MCP parity.
+The release artifact has no independently established compiler/SDK or
+reproducible source build; the default lane does not verify an installed package.
+See [HarmonyOS package inventory](harmony-analysis.md) for those proof boundaries.
+HarmonyOS `.har` libraries are deliberately not suffix-classified because
+`.har` also names HTTP Archive JSON.
+
 Synthetic producer regressions run independently:
 
 ```sh
@@ -647,6 +690,13 @@ the same device. See [ADB device analysis](adb-device-analysis.md) for
 boundaries and budgets.
 
 ## Optional NativeAOT Ghidra analysis
+
+The source parser lane is independent of the optional annotation JAR. Its
+synthetic RTR 9.1 PE golden checks captured-byte digest admission, rehydration
+into an immutable parser overlay, MethodTable/slot relationships, and frozen
+literal extraction; provider tests exercise `inspect_native_load_image` and
+address-based `inspect_native_data_type` with the database result still
+unavailable. These tests do not establish Windows Ghidra host behavior.
 
 This lane is separate from the default native lane. `build:fixtures:nativeaot`
 requires an existing .NET SDK 8.0.416, the platform NativeAOT compiler/linker and
@@ -703,9 +753,15 @@ entries, external callees, target switches, cancellation draining, snapshot
 replay exclusion, ownership failures, and incomplete cleanup. They do not
 establish real IDA operation. The initial real workflows cover legacy upstream
 1.4.0 on a Windows GUI and the modern supervisor at upstream commit
-`c133c3853faa111a9b00ee615c013b720d0c4acd` with Windows x64 IDA 9.3.
-Linux/macOS headless, modern attached GUI tools, other engine versions and
-architectures remain unverified; see the [provider guide](ida-provider.md).
+`c133c3853faa111a9b00ee615c013b720d0c4acd` with Windows x64 IDA 9.3, and the
+headless profile on macOS arm64 with IDA Professional 9.1 (build 9.1.250226)
+at the same upstream commit, using `tests/conformance/ida/inventory.c` built
+with `clang -O0 -arch arm64` and the procedure `_rea_fixture_add` (Mach-O C
+symbols carry a leading underscore). Before the headless session waited out
+the transient `busy` health a worker can report right after opening, that lane
+failed intermittently on that host. Linux headless, modern attached GUI tools,
+other engine versions and architectures remain unverified; see the
+[provider guide](ida-provider.md).
 
 ## DOS Ghidra analysis
 
@@ -748,12 +804,37 @@ Pull requests that change only root `README*.md` files, `docs/`, `AGENTS.md`,
 or `CONTRIBUTING.md` run formatting and generated-document validation without
 the source-test shards or native package lanes. Classification compares the PR
 head with its merge base, so later base-branch changes do not expand that scope.
-The required static and coverage aggregate jobs remain present and fail if
-classification fails. Mixed changes, unknown paths and CI configuration changes
-retain full checks. Main pushes retain the full baseline, including after
-documentation merges; newer commits cancel superseded CI for the same PR or
-main branch. Release publication has its own concurrency group and retains its
-package verification and public-registry canary.
+Static and coverage aggregate jobs remain present and fail if classification
+fails. Every code change retains the complete four-shard Linux suite; individual
+test files are not selected by imports or filenames.
+
+`scripts/ci/plan.mjs` selects lanes using the ownership table in
+`scripts/ci/scopes.mjs`. Provider implementation changes run their real-provider
+verifiers and the Linux x64 installed-package/Inspector baseline. Test-only
+changes run the Linux suite without native package verification. Website changes
+run website checks. Provider workflow changes validate the workflow and run that provider's verifier.
+Manual-provider/Android workflow changes run workflow validation only.
+Shared process/contract/CLI boundaries, dependencies, packaging inputs, unknown
+paths, and changes to the planner select the full baseline. Package script-only
+edits select their owning verifier when its entrypoint is identifiable; unknown
+or shared script changes select everything. Android build-script edits retain
+the Linux suite and workflow validation; real Android verification stays manual.
+Renames account for both paths.
+
+Main pushes and manual dispatch retain the full baseline, including all portable
+provider lanes and the native matrix below. A `ci:full` PR label selects the full
+baseline on the next PR run; manual dispatch can request it immediately. Each
+classification job records its selection and broad-fallback reasons in the run
+summary. Representative Git-diff cases live in
+`tests/boundary/filesystem/ciChangeScope.test.ts`.
+
+`CI required` checks classification and every selected lane, rejecting failed,
+cancelled, or unexpectedly skipped work. Existing required check names are
+preserved; changing branch protection to require the new aggregate is a separate
+repository-settings operation. Newer commits cancel superseded CI for the same
+PR or main branch. Release publication has its own concurrency group and retains
+its package verification and public-registry canary. Licensed/self-hosted
+provider workflows and the Android smoke test retain their explicit triggers.
 
 CI exercises the pinned Node.js runtime on native hosted runners:
 
@@ -767,16 +848,73 @@ CI exercises the pinned Node.js runtime on native hosted runners:
 
 Package lanes assert the actual Node platform/architecture before verification
 and record those values with the Node version. The four-host package matrix
-runs at most two jobs concurrently with explicit timeouts and Node heap/thread
-limits; Windows retains its curated capability lane. Package checks cover
-installation, CLI/MCP discovery, target-free
-analysis, configuration backups/recovery, Evidence and owned lifecycle; Inspector
-checks execute source-owned loopback targets and special filename cases.
+runs up to four jobs concurrently on independent hosted runners with explicit
+timeouts and per-runner Node heap/thread limits; Windows retains its curated
+capability lane. Package checks cover installation, CLI/MCP discovery,
+target-free analysis, configuration backups/recovery, Evidence and owned
+lifecycle; Inspector checks execute source-owned loopback targets and special
+filename cases.
+
+POSIX package verification resolves the runner's configured npm cache before
+creating disposable client homes and passes that location to its child installs.
+This reuses the download cache restored by `setup-node` while keeping client
+configuration isolated. Installs retain their existing registry and integrity
+checks.
+
+The Apple artifact CLI/MCP lane uses one `macos-15` job to avoid adding demand
+for scarce macOS runner capacity. It runs the artifact-format and metadata
+verifiers, followed by one consolidated focused invocation containing all
+existing native and process-boundary regression paths.
+
+The Linux source-test shards download a shared runtime and generated test
+metadata snapshot produced by the build job with `npm run test:prepare`. The
+snapshot includes `dist/`, generated skills, the MCP tool catalog, product
+catalog, and managed-conformance metadata. Each shard still installs the locked
+dependencies and runs its assigned coverage-enabled tests; it no longer
+regenerates the same metadata independently.
+
+The build job also retrieves the merged timing report from the last successful
+default-branch push and includes that same report in each shard's snapshot.
+CI assigns discovered files by historical duration, with a deterministic
+fallback weight for new files, rather than dividing only by file count. Every
+discovered file still belongs to exactly one shard; worker limits, project
+ordering, coverage instrumentation, and aggregate thresholds remain unchanged.
+Missing or unusable history falls back to Vitest's default assignment. Only
+timing data is reused; persistent compile caches remain disabled.
 
 These native baseline checks complement the Linux source-test shards and the
 separate Apple-artifact and real-provider lanes. Actual Hopper, Ghidra, IDA,
 browser and managed-tool claims require their corresponding verification lanes.
 Runner labels follow the [GitHub hosted-runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+
+### Termux Android browser smoke test
+
+The **Real Termux browser verification** workflow is manual-only while its
+emulator setup is being validated. After the workflow reaches the default
+branch, select a revision under **Actions → Real Termux browser verification →
+Run workflow**. It boots an Android 11 (API 30) x86_64 emulator, installs the
+checksum-verified Termux 0.118.3 APK, and lets the app initialize its bootstrap.
+The host stages the selected revision using `git archive HEAD`; no workstation
+build outputs or dependencies are copied into Android.
+
+`scripts/verify/termux/emulator.sh` sends a `RUN_COMMAND` intent to Termux's app
+service. Root access is limited to staging files, sending the intent, and reading
+diagnostics; installation, compilation, Node, and Chromium run as Termux's app
+UID. The in-app script installs Termux's Android-linked Node distribution,
+checks its version against `.nvmrc`, pins npm from `packageManager`, runs
+`npm ci`, and builds with `build:termux`. Termux repository packages, including
+Chromium, are resolved at run time; their installed versions are logged.
+
+The verifier leaves Playwright's cache environment overrides unset, requires
+a healthy public MCP doctor result, and captures URL plus DOM from a loopback
+HTTP fixture through `capture-browser-scenario`. It checks completed steps,
+the exact URL, a DOM marker, and reported browser cleanup. This lane covers one
+Android emulator and Termux combination, not physical ARM devices, Electron,
+or the complete desktop browser suite. A workflow definition alone does not
+establish passing Android coverage; inspect its execution receipt.
+
+The `termux-browser-diagnostics` artifact retains the Termux command log, exit
+status, and Android logcat on success or failure. The emulator is disposable.
 
 ## Developer commands
 
@@ -819,6 +957,11 @@ it or select another revision.
 
 Source typechecking needs no compiled runtime or generated test metadata.
 `npm run build:cached` compiles the CLI/MCP runtime and its packaged skill.
+Turbo's strict task environment preserves caller-selected `GOMAXPROCS`,
+`GOMEMLIMIT`, and `UV_THREADPOOL_SIZE` for resource-constrained builds and
+checks. These execution controls do not change artifact content, so changing
+their values retains cache reuse. They control individual runtimes; monitor
+the complete process family separately when enforcing a total memory budget.
 `npm run test:prepare` also generates the MCP contract test catalog, product
 catalog, and portable managed evidence used by the complete suite. Focused
 tests prepare those extra outputs only when their selected files consume them.
@@ -845,16 +988,37 @@ provider evidence.
 Vitest projects use up to two workers, bounded by host parallelism.
 `process-boundary` runs later with serial files because process-tree sampling
 shares host resources. Acceptance and process-global cases use isolated forks
-without serial scheduling. Pure domain/service and MCP boundary projects share
-immutable module graphs; each MCP session still owns its resources. Other
-projects retain per-file isolation. See `vitest.config.ts` for current settings.
+without serial scheduling. Pure domain/service, composition, conformance,
+evaluation, and MCP boundary projects share module graphs; their tests avoid
+process-global state and keep resource cleanup test-scoped. Each MCP session
+still owns its resources. Adapter, non-MCP boundary, acceptance, and
+process-global projects retain per-file isolation. See `vitest.config.ts` for
+current settings.
+
+Vitest worker limits do not bound subprocesses launched within a test. Bound
+those batches separately so repeated CLI validation cannot oversubscribe the
+runner. Preserve simultaneous launches where concurrency is itself under test.
 
 Build/documentation writers hold checkout-local output locks. Tests do not
 hold a broad command lock; `check:pr` finishes tests before document validation.
 
-Vitest and Node persistent compile caches are deliberately not enabled by
-default. To evaluate repeated local runs, opt in for both cold and warm
-measurements with an isolated cache:
+Vitest's persistent compile cache remains disabled. The `cliTest` fixture shares
+a temporary Node compile cache among its fresh CLI subprocesses. The worker
+removes it after test-scoped processes finish. Explicit child environment
+settings take precedence; children requesting `NODE_V8_COVERAGE` do not receive
+the fixture cache. These subprocesses are outside aggregate Vitest coverage;
+subprocess coverage attachment remains disabled. Cold-start import checks launch
+independently without this fixture cache.
+
+The Apple artifact verifier step shares a job-temporary bytecode cache among
+its fresh CLI/MCP children via `REA_ARTIFACT_NODE_COMPILE_CACHE`. The artifact
+helper maps this setting to child `NODE_COMPILE_CACHE`; npm, Turbo, and nested
+Vitest runs do not inherit that setting. Explicit `NODE_COMPILE_CACHE` takes
+precedence, and coverage collection or `NODE_DISABLE_COMPILE_CACHE=1` disables
+the helper's cache. The cache is discarded with the CI job.
+
+To evaluate persistent compile caching for repeated local runs, opt in for both
+cold and warm measurements with an isolated cache:
 
 ```bash
 NODE_COMPILE_CACHE=.cache/node-compile npm test
@@ -876,6 +1040,19 @@ reports, uploads them together, and writes the slowest files to the workflow
 summary. Static checks, documentation, build, package verification, and
 real-system lanes remain separate jobs so one kind of evidence cannot stand in
 for another.
+
+The build job saves portable Turbo outputs across runs. Eight Linux real-system
+lanes restore this cache without waiting for the build job. The shared action
+derives its key from `test:prepare --dry=json` task hashes, runner OS and
+architecture, and `.npmrc`; test-only changes can reuse compiled outputs. Every
+build and verification command still runs, so Turbo checks task inputs and
+rebuilds misses. There is no prefix fallback to accumulate older build outputs.
+
+Native package jobs reuse the same workflow's Turbo cache for portable compiled
+JavaScript, skills, and catalogs. They retain the normal build and prepack
+commands, which restore matching outputs or rebuild on a cache miss. Native
+artifacts, dependency installs, package archives, and runtime verification remain
+host-local. Keep platform-dependent outputs out of this shared cache.
 
 The PR acceptance target is a median `npm run check:pr` wall time below three
 minutes across three warm-build runs on the benchmark host. Keep Vitest caches
@@ -951,7 +1128,10 @@ and `REA_JAVASCRIPT_FIXTURE_TOOLS` pointing to an isolated npm prefix containing
 esbuild 0.25.10 and webpack 5.101.3. No global installation is required.
 The lane compiles source-owned fixtures, exercises CLI and stdio MCP, verifies
 published bytes and provenance, feeds recovered modules into existing analysis,
-and compares a finite set of known fixture results. The provider also accepts
+and compares a finite set of known fixture results. A webpack fixture with separate
+runtime, shared, entry and lazy chunks verifies multi-input recovery through both
+surfaces, per-file provenance and resolved cross-chunk imports in the downstream
+application graph. The provider also accepts
 other ^1.13.0 releases and reports them as unverified; this lane proves the
 audited release. It does not establish
 arbitrary recovered-application equivalence. CI installs these prerequisites only
@@ -1168,3 +1348,25 @@ npm run evidence:check
 
 The records preserve unsupported and unverified coverage as explicit unknowns.
 Run the matching real-tool prerequisites described in this guide.
+
+### Offline WASM artifacts
+
+`npm run verify:wasm:artifact -- --require-tools` uses an absolute
+`REA_WABT_BIN_DIRECTORY` containing WABT 1.0.42, including `wat2wasm` for fixture
+generation. It installs nothing. Without configuration, the default invocation
+reports a named skip; `--require-tools` makes missing configuration fail.
+
+The verifier creates and validates real modules with custom sections, multiple
+import/export kinds, escaped names and empty modules. It compares exact WAT,
+section output and selected/tool digests through the compiled CLI and real MCP
+SDK, validates advertised schemas, checks identical CLI/MCP Evidence IDs and
+session bundle readback, retains invalid/truncated module diagnostics, preserves
+all inputs and checks workspace cleanup. Pass an installed package's
+`scripts/rea.mjs` as the first argument to run the same lane against the package.
+`npm run verify:wasm:package` packs and installs REA into an isolated temporary
+prefix with lifecycle scripts disabled and runs the same required real-tool lane.
+It requires WABT configuration and makes no host tool installation.
+
+Source-owned provider tests separately exercise cancellation, deadline propagation,
+malformed producer output and cleanup uncertainty; shared owned-command tests
+exercise actual subprocess timeout and cancellation.
