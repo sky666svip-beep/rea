@@ -224,11 +224,40 @@ jobs:
             echo "created=true" >> "$GITHUB_OUTPUT"
             {
               echo ""
-              echo "已创建并推送 tag：${TAG}（指向 fork main $(git rev-parse --short HEAD)，上游快照 ${UPSTREAM_SHA:0:12} 见注解）"
+              echo "已创建并推送 tag：${TAG}（指向 ${UPSTREAM_SHA:0:12}）"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      # ---------- 7. 结果汇总 ----------
+      # ---------- 7. 自动禁用上游继承的工作流 ----------
+      # 上游会不断新增 .github/workflows/*，同步 merge 会把这些文件带进 fork，
+      # 而新文件对应的 workflow 默认处于「启用」状态，于是每次同步都会连带跑
+      # 一堆必然失败的上游 CI。这一步自动把它们禁用，只保留本 fork 自己的两个。
+      # 需要 SYNC_TOKEN 具备 Actions 写权限（经典 PAT 的 repo 权限即可）。
+      - name: Disable inherited upstream workflows
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
+        run: |
+          set -uo pipefail
+          KEEP="sync-upstream.yml keepalive.yml"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows" --paginate \
+            --jq '.workflows[] | [.id, .path, .state] | @tsv' 2>/dev/null |
+          while IFS=$'\t' read -r id path state; do
+            base="$(basename "${path}")"
+            skip=false
+            for k in ${KEEP}; do
+              if [ "${base}" = "${k}" ]; then skip=true; fi
+            done
+            if [ "${skip}" = "true" ]; then continue; fi
+            if [ "${state}" != "disabled_manually" ]; then
+              echo "禁用 ${base}（id=${id}, state=${state}）"
+              gh api -X PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/${id}/disable" >/dev/null 2>&1 \
+                || echo "  └ 失败：SYNC_TOKEN 可能缺少 Actions 写权限"
+            fi
+          done
+          echo "已自动禁用上游继承的工作流（若失败请检查 SYNC_TOKEN 权限）" >> "$GITHUB_STEP_SUMMARY"
+
+      # ---------- 8. 结果汇总 ----------
       - name: Summary
         if: always()
         env:
@@ -251,7 +280,7 @@ jobs:
             echo "| 触发方式 | ${{ github.event_name }} |"
           } >> "$GITHUB_STEP_SUMMARY" || true
 
-      # ---------- 8. 失败时开 Issue 通知（同 label 只保留一个 open Issue） ----------
+      # ---------- 9. 失败时开 Issue 通知（同 label 只保留一个 open Issue） ----------
       - name: Open or update Issue on failure
         if: failure()
         continue-on-error: true
