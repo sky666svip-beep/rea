@@ -5,7 +5,7 @@
 #   COMMIT_COUNT=$(git rev-list --count upstream/main)
 #   例：v1987 / v1988 ...  该 tag 打在 fork 的 main 上，标记本次同步的快照点。
 #
-# 触发：每天 UTC 19:16（北京时间次日 03:16）+ 手动 workflow_dispatch
+# 触发：每天 UTC 16:16+ 手动 workflow_dispatch
 #
 # ---------------------------------------------------------------------------
 # 重要：必须配置仓库 Secret SYNC_TOKEN
@@ -27,8 +27,8 @@ name: Sync upstream + auto tag
 
 on:
   schedule:
-    # 每天 UTC 19:16（北京时间次日 03:16）
-    - cron: "16 19 * * *"
+    # 每天 UTC 16:16
+    - cron: "16 16 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -232,7 +232,8 @@ jobs:
       # 上游会不断新增 .github/workflows/*，同步 merge 会把这些文件带进 fork，
       # 而新文件对应的 workflow 默认处于「启用」状态，于是每次同步都会连带跑
       # 一堆必然失败的上游 CI。这一步自动把它们禁用，只保留本 fork 自己的两个。
-      # 需要 SYNC_TOKEN 具备 Actions 写权限（经典 PAT 的 repo 权限即可）。
+      # 需要 SYNC_TOKEN 具备 Actions 写权限（经典 PAT 需 repo + workflow 两个 scope；
+      # fine-grained PAT 需 Actions: Read and write）。
       - name: Disable inherited upstream workflows
         continue-on-error: true
         env:
@@ -240,22 +241,59 @@ jobs:
         run: |
           set -uo pipefail
           KEEP="sync-upstream.yml keepalive.yml"
-          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows" --paginate \
-            --jq '.workflows[] | [.id, .path, .state] | @tsv' 2>/dev/null |
+          DISABLED_LIST=""
+          FAILED_LIST=""
+
+          echo "=== 拉取 workflow 列表 ==="
+          if ! gh api "repos/${GITHUB_REPOSITORY}/actions/workflows?per_page=100" > /tmp/wf.json 2>/tmp/wf.err; then
+            echo "!! 列表接口调用失败："
+            cat /tmp/wf.err
+            echo "!! 无法继续，跳过自动禁用。"
+            exit 0
+          fi
+          echo "total_count = $(jq -r '.total_count' /tmp/wf.json)"
+
+          jq -r '.workflows[] | "\(.id)\t\(.path)\t\(.state)"' /tmp/wf.json > /tmp/wf.tsv
+
           while IFS=$'\t' read -r id path state; do
+            [ -z "${id}" ] && continue
             base="$(basename "${path}")"
+
             skip=false
             for k in ${KEEP}; do
               if [ "${base}" = "${k}" ]; then skip=true; fi
             done
-            if [ "${skip}" = "true" ]; then continue; fi
-            if [ "${state}" != "disabled_manually" ]; then
-              echo "禁用 ${base}（id=${id}, state=${state}）"
-              gh api -X PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/${id}/disable" >/dev/null 2>&1 \
-                || echo "  └ 失败：SYNC_TOKEN 可能缺少 Actions 写权限"
+            if [ "${skip}" = "true" ]; then
+              echo "保留   ${base}  (state=${state})"
+              continue
             fi
-          done
-          echo "已自动禁用上游继承的工作流（若失败请检查 SYNC_TOKEN 权限）" >> "$GITHUB_STEP_SUMMARY"
+            if [ "${state}" = "disabled_manually" ]; then
+              echo "已禁用 ${base}"
+              continue
+            fi
+
+            echo "禁用中 ${base}  (id=${id}, state=${state})"
+            if gh api -X PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/${id}/disable" > /tmp/dis.err 2>&1; then
+              echo "   └ 成功"
+              DISABLED_LIST="${DISABLED_LIST} ${base}"
+            else
+              echo "   └ 失败，接口返回："
+              sed 's/^/      /' /tmp/dis.err
+              FAILED_LIST="${FAILED_LIST} ${base}"
+            fi
+          done < /tmp/wf.tsv
+
+          {
+            echo ""
+            echo "## 工作流自动禁用结果"
+            echo ""
+            echo "- 新禁用：${DISABLED_LIST:-（无）}"
+            echo "- 失败：${FAILED_LIST:-（无）}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -n "${FAILED_LIST}" ]; then
+            echo "::warning::有工作流禁用失败：${FAILED_LIST} —— 请检查 SYNC_TOKEN 是否具备 Actions 写权限（经典 PAT 需 repo+workflow，fine-grained 需 Actions: Read and write）"
+          fi
 
       # ---------- 8. 结果汇总 ----------
       - name: Summary
