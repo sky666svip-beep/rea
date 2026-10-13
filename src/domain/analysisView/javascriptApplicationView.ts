@@ -239,13 +239,23 @@ const selectModule = (
 export const projectJavaScriptApplicationView = (
   parent: AnalysisViewParent,
   analysis: JavaScriptApplicationAnalysisResult,
-  view: AnalysisViewRequest,
+  view: Exclude<AnalysisViewRequest, { kind: "api-surface" }>,
 ): Result<UnsignedAnalysisView, AnalysisError> => {
   const shared = parentFields(parent, analysis);
   const modules = moduleEntries(analysis.graph.nodes);
   if (view.kind === "native")
     return err(
       jsIncompatible("Native views require analyze_function Evidence."),
+    );
+  if (view.kind === "inventory")
+    return err(jsIncompatible("Inventory views require artifact Evidence."));
+  if (view.kind === "wasm")
+    return err(
+      jsIncompatible("WASM views require inspect_wasm_artifact Evidence."),
+    );
+  if (view.kind === "evm")
+    return err(
+      jsIncompatible("EVM views require inspect_evm_interface Evidence."),
     );
   if (view.kind === "summary")
     return ok({
