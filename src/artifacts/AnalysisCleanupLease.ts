@@ -1,4 +1,7 @@
-import type { AnalysisError } from "../domain/analysisErrorBase.js";
+import type {
+  AnalysisError,
+  AnalysisCleanupResourceOwner,
+} from "../domain/analysisErrorBase.js";
 
 /** Link one resource's confirmed release to its originating analysis error. */
 export class AnalysisCleanupLease {
@@ -6,7 +9,52 @@ export class AnalysisCleanupLease {
   #errors: WeakRef<AnalysisError>[] = [];
   readonly #groups = new Set<AnalysisCleanupLeaseGroup>();
 
-  constructor(private readonly cleanup: () => Promise<void>) {}
+  /** Whether this exact owner has confirmed release. */
+  get released(): boolean {
+    return this.#released;
+  }
+
+  readonly #resourceOwner: AnalysisCleanupResourceOwner | undefined;
+  readonly #resources: readonly string[] | undefined;
+
+  get cleanupResources(): readonly string[] | undefined {
+    return this.#resourceOwner === undefined
+      ? this.#resources
+      : this.#resourceOwner.cleanupResources;
+  }
+
+  /** Adopt exact close authority while retaining its live labels across retries. */
+  static forCloseOwner(
+    owner: {
+      close(): Promise<void>;
+      readonly cleanupResources?: readonly string[] | undefined;
+    },
+    resource: string,
+  ): AnalysisCleanupLease {
+    return new AnalysisCleanupLease(
+      () => owner.close(),
+      !("cleanupResources" in owner)
+        ? [resource]
+        : {
+            get cleanupResources() {
+              return owner.cleanupResources;
+            },
+          },
+    );
+  }
+
+  constructor(
+    private readonly cleanup: () => Promise<void>,
+    resources?: readonly string[] | AnalysisCleanupResourceOwner,
+  ) {
+    if (resources !== undefined && "cleanupResources" in resources) {
+      this.#resourceOwner = resources;
+      this.#resources = undefined;
+    } else {
+      this.#resourceOwner = undefined;
+      this.#resources = resources === undefined ? undefined : [...resources];
+    }
+  }
 
   async release(): Promise<void> {
     if (this.#released) return;
@@ -55,7 +103,21 @@ export class AnalysisCleanupLeaseGroup {
     this.#error = new WeakRef(error);
     this.#pending = new Set(owners);
     if (this.#pending.size === 0) return;
+    error.bindCleanupResourceOwner(this);
     for (const owner of this.#pending) owner.bindCleanupGroup(this);
+  }
+
+  /** Unlabelled owners keep attribution unknown; never match resources by text. */
+  get cleanupResources(): readonly string[] | undefined {
+    if (
+      [...this.#pending].some((owner) => owner.cleanupResources === undefined)
+    )
+      return undefined;
+    return [
+      ...new Set(
+        [...this.#pending].flatMap((owner) => owner.cleanupResources ?? []),
+      ),
+    ];
   }
 
   get hasLiveError(): boolean {
