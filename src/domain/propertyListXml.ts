@@ -1,12 +1,18 @@
-import type { Document, Node } from "@xmldom/xmldom";
+import type { Node } from "@xmldom/xmldom";
+
+import { readXmlPlistSource } from "./propertyListXmlSource.js";
 
 import {
+  UnknownPlistReal,
   createPlistNumberCollector,
   parsePlistIntegerLiteral,
+  parsePlistNonFiniteRealLiteral,
 } from "./apple/plistNumbers.js";
 
-/** Interpret an already validated, depth-bounded DOM, owning values and number facts together. */
-export const decodeXmlPropertyList = (document: Document) => {
+/** Own source interpretation, depth, values and numeric facts together. */
+export const decodeXmlPropertyList = (text: string) => {
+  const source = readXmlPlistSource(text);
+  const document = source.document;
   const root = document.documentElement;
   if (root?.nodeName !== "plist")
     throw new TypeError("malformed document. First element should be <plist>");
@@ -43,7 +49,8 @@ export const decodeXmlPropertyList = (document: Document) => {
       if (
         child.nodeType !== child.TEXT_NODE &&
         child.nodeType !== child.CDATA_SECTION_NODE &&
-        child.nodeType !== child.COMMENT_NODE
+        child.nodeType !== child.COMMENT_NODE &&
+        child.nodeType !== child.PROCESSING_INSTRUCTION_NODE
       )
         yield child;
   };
@@ -98,7 +105,13 @@ export const decodeXmlPropertyList = (document: Document) => {
           : undefined;
         if (exact === undefined) {
           numbers.markIncomplete();
-          return Number.parseInt(first.nodeValue ?? "", 10);
+          const partial = Number.parseInt(first.nodeValue ?? "", 10);
+          // An integer has no signed zero; keep -0 from reading as a real.
+          return !Number.isFinite(partial)
+            ? new UnknownPlistReal()
+            : partial === 0
+              ? 0
+              : partial;
         }
         numbers.integer(exact);
         const decoded = Number(exact);
@@ -109,14 +122,25 @@ export const decodeXmlPropertyList = (document: Document) => {
       case "real": {
         requireContent(node);
         const literal = content(node, characterNode);
+        if (!literal.complete) numbers.markIncomplete();
+        // CFPropertyList spells NaN and the infinities; parseFloat would read
+        // the lowercase spellings as NaN and lose the kind and sign.
+        const known = literal.complete
+          ? parsePlistNonFiniteRealLiteral(literal.text)
+          : undefined;
+        if (known !== undefined) {
+          numbers.real(known);
+          return known;
+        }
         const value = Number.parseFloat(literal.text);
+        if (!Number.isFinite(value)) return new UnknownPlistReal();
         if (literal.complete) numbers.real(value);
-        else numbers.markIncomplete();
         return value;
       }
       case "data": {
-        const binary = atob(content(node, textNode).text.replace(/\s+/gu, ""));
-        return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+        const value = source.dataValue(node);
+        if (!value.ok) throw value.error;
+        return value.value;
       }
       case "date": {
         const value = requireContent(node).nodeValue;
