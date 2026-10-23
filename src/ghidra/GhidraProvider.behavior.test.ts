@@ -37,7 +37,7 @@ import { jsonValueSchema, type JsonValue } from "../domain/jsonValue.js";
 import { parseConfig } from "../config/parseConfig.js";
 import type { BinaryTarget } from "../domain/binaryTargetTypes.js";
 import { parseExecutableHeader } from "../domain/binaryTarget.js";
-import { elf } from "../domain/binaryTarget.fixture.js";
+import { elf, thinMach } from "../domain/binaryTarget.fixture.js";
 import { GhidraProvider } from "./GhidraProvider.js";
 import type { GhidraTargetSnapshot } from "./GhidraClient.js";
 import type { GhidraProviderClientFactory } from "./GhidraProviderClient.js";
@@ -51,6 +51,10 @@ import { silentLogger } from "../logger.js";
 import { ProviderCleanupError } from "../domain/providerCleanupError.js";
 import { projectAnalysisError } from "../domain/analysisErrorProjection.js";
 import { ProviderStartupDeadline } from "../process/ProviderDeadline.js";
+import {
+  createFunctionCoordinateContext,
+  functionCoordinateContextsEqual,
+} from "../domain/native/functionCoordinateContext.js";
 import { createAnalysisProfile } from "../domain/analysisProfile.js";
 import { createAnalysisExecution } from "../application/AnalysisProvider.js";
 import { AnalysisSnapshotCache } from "../application/binary/AnalysisSnapshotCache.js";
@@ -512,6 +516,24 @@ describe("Ghidra raw-binary profile", () => {
 });
 
 describe("Ghidra Mach-O slice support", () => {
+  it("declines parsed thin arm64_32 Mach-O targets", () => {
+    const parsed = parseExecutableHeader(
+      thinMach(0xcefaedfe, 0x0200000c),
+      "arm64",
+    );
+    if (!parsed.ok) throw new Error("Expected valid arm64_32 Mach-O target");
+    expect(
+      provider().inspectTargetSupport({
+        path: "/tmp/watch.o",
+        sha256: "a".repeat(64),
+        kind: "executable",
+        ...parsed.value,
+      }),
+    ).toMatchObject({
+      status: "unsupported",
+      code: "architecture_unsupported",
+    });
+  });
   it("refuses universal targets whose selected slice cannot be enforced", () => {
     const ghidra = provider();
     const universal: BinaryTarget = {
@@ -1460,10 +1482,13 @@ describe("Ghidra measured raw load-image projection", () => {
     "mapping-mismatch",
     "changed-snapshot",
     "cancelled",
+    "malformed-coordinate",
   ] as const)(
     "streams raw snapshot identity and preserves %s outcomes",
     async (state) => {
       const fixture = fixtureRawBinaryLoadImage();
+      if (state === "malformed-coordinate")
+        fixture.observation.image_base = "not-an-address";
       if (state === "mapping-mismatch") {
         const mapping = fixture.observation.mappings[0];
         if (mapping === undefined)
@@ -1524,7 +1549,9 @@ describe("Ghidra measured raw load-image projection", () => {
           {},
           { signal: controller.signal },
         );
-        expect(signals).toEqual([controller.signal]);
+        expect(signals).toEqual(
+          state === "malformed-coordinate" ? [] : [controller.signal],
+        );
         if (state === "verified" || state === "mapping-mismatch") {
           if (!result.ok) throw result.error;
           expect(result.value.result).toMatchObject({
@@ -1549,7 +1576,9 @@ describe("Ghidra measured raw load-image projection", () => {
               _tag:
                 state === "cancelled"
                   ? "AnalysisCancelledError"
-                  : "ProviderAdapterError",
+                  : state === "malformed-coordinate"
+                    ? "AnalysisOutputError"
+                    : "ProviderAdapterError",
             },
           });
         }
@@ -4089,3 +4118,45 @@ it.each([false, true])(
     );
   },
 );
+
+it("commits native coordinates independently of analyzer choices and preserves raw base identity", async () => {
+  const resolve = async (ghidra: GhidraProvider, target: BinaryTarget) => {
+    const resolved = await ghidra.resolveAnalysisProfile(target);
+    if (!resolved.ok) throw resolved.error;
+    if (resolved.value.profile === null)
+      throw new Error("expected native profile");
+    return resolved.value.profile;
+  };
+  const defaultProvider = provider();
+  const configured = configuredProvider({
+    REA_GHIDRA_DISABLED_ANALYZERS: "Decompiler Switch Analysis",
+  });
+  const target = executableTarget("elf", "x86_64");
+  const baseline = await resolve(defaultProvider, target);
+  const changedOptions = await resolve(configured, target);
+  expect(baseline.parameters.function_coordinate_context).toEqual(
+    createFunctionCoordinateContext({
+      loader: "auto-from-header",
+      language_id: "auto-from-header",
+      compiler_spec_id: "auto-default",
+      load_segment: null,
+      address_coordinates: null,
+      entry_point: null,
+    }),
+  );
+  expect(baseline.digest).not.toBe(changedOptions.digest);
+  expect(functionCoordinateContextsEqual(baseline, changedOptions)).toBe(true);
+  const raw = fixtureRawBinaryLoadImage().target;
+  const rawProfile = await resolve(defaultProvider, raw);
+  const shifted = await resolve(defaultProvider, {
+    ...raw,
+    entryPoint: "0x8001000",
+    entryPointSource: "0x8001000",
+  });
+  expect(rawProfile.parameters.function_coordinate_context).toMatchObject({
+    kind: "native-function-coordinate-context-v1",
+    selected_image: null,
+    mapping_sha256: expect.any(String),
+  });
+  expect(functionCoordinateContextsEqual(rawProfile, shifted)).toBe(false);
+});

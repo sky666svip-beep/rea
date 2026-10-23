@@ -72,7 +72,7 @@ cliTest(
       ],
     });
     expect(result.exitCode).toBe(0);
-    const expected = inspectAnalysisView({
+    const expected = await inspectAnalysisView({
       source: { kind: "inline", evidence: parent },
       view,
     });
@@ -191,7 +191,7 @@ cliTest(
         limit: 1,
       },
     };
-    const expected = inspectAnalysisView(input);
+    const expected = await inspectAnalysisView(input);
     if (!expected.ok) throw expected.error;
     await writeFile(request, JSON.stringify(input));
     const response = await cli.run({
@@ -348,7 +348,7 @@ cliTest(
           source: { kind: "inline" as const, evidence },
           view: { kind: "summary" as const },
         };
-        const application = inspectAnalysisView(request);
+        const application = await inspectAnalysisView(request);
         await writeFile(path, JSON.stringify(request));
         const reply = await cli.run({
           arguments: ["inspect-analysis-view", path, "--json"],
@@ -397,7 +397,7 @@ cliTest(
       source: { kind: "inline" as const, evidence: reseal(inspection, nested) },
       view: { kind: "summary" as const },
     };
-    const application = inspectAnalysisView(request);
+    const application = await inspectAnalysisView(request);
     expect(application.ok).toBe(false);
     if (application.ok) throw new Error("Expected invalid nested Evidence");
     expect(application.error.cause).toMatchObject({
@@ -552,6 +552,92 @@ cliTest(
     expect(complete.json).toEqual(bundle);
   },
 );
+
+cliTest(
+  "formats the full caller-admitted native inventory page as Markdown and JSON",
+  async ({ cli }) => {
+    const root = await createTestTempDirectory(
+      "rea-native-inventory-markdown-",
+    );
+    const input = join(root, "view.json");
+    const rowCount = 150_000;
+    {
+      const parent = createEvidence(
+        {
+          path: "/fixtures/native.exe",
+          format: "pe",
+          sha256: "a".repeat(64),
+        },
+        { id: "fixture", name: "Fixture", version: "1" },
+        {
+          operation: "list_names",
+          parameters: {},
+          result: Array.from({ length: rowCount }, (_, index) => ({
+            address: `0x${index.toString(16)}`,
+            value: `item${index}`,
+          })),
+        },
+      );
+      const request = {
+        source: { kind: "inline", evidence: parent },
+        view: {
+          kind: "native-inventory",
+          limit: rowCount,
+          fields: ["value"],
+        },
+      };
+      await writeFile(input, JSON.stringify(request));
+    }
+    const environment = {
+      HOME: root,
+      XDG_CONFIG_HOME: root,
+      XDG_CACHE_HOME: root,
+      REA_LOG_LEVEL: "silent",
+    };
+
+    {
+      const json = await cli.run({
+        arguments: [
+          "inspect-analysis-view",
+          input,
+          "--format",
+          "json",
+          "--filter-output",
+          "normalized_result.rows",
+        ],
+        environment,
+        timeoutMs: 60_000,
+      });
+      expect(json.exitCode).toBe(0);
+      expect(
+        (json.json as { normalized_result: { rows: unknown[] } })
+          .normalized_result.rows,
+      ).toHaveLength(rowCount);
+    }
+
+    const markdown = await cli.run({
+      arguments: [
+        "inspect-analysis-view",
+        input,
+        "--format",
+        "md",
+        "--filter-output",
+        "normalized_result.rows",
+      ],
+      environment,
+      timeoutMs: 60_000,
+    });
+    expect(markdown.exitCode).toBe(0);
+    expect(markdown.stdout).toContain("## normalized_result.rows");
+    expect(markdown.stdout).toContain("| source_index");
+    let lineBreaks = 0;
+    for (const character of markdown.stdout)
+      if (character === "\n") lineBreaks += 1;
+    expect(lineBreaks).toBeGreaterThan(rowCount);
+    expect(markdown.stdout).toContain("149999");
+  },
+);
+
 cliTest(
   "projects one section from a JSON file of inline layout Evidence",
   async ({ cli }) => {
@@ -664,7 +750,7 @@ cliTest("rejects a request that omits source", async ({ cli }) => {
   expect(result.json).toMatchObject({
     code: "invalid_request",
     category: "invalid_input",
-    details: { operation: "inspect-analysis-view" },
+    details: { operation: "inspect_analysis_view" },
   });
 });
 
@@ -820,7 +906,7 @@ cliTest(
       parent_evidence_id: parent.evidence_id,
     });
     // The file source projects exactly what the same Evidence projects inline.
-    const inline = inspectAnalysisView({
+    const inline = await inspectAnalysisView({
       source: { kind: "inline", evidence: parent },
       view,
     });
