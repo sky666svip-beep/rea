@@ -3,6 +3,10 @@ import { locateGodotPck } from "../GodotPckLocation.js";
 import { withArtifactRegularFile } from "../ArtifactFileOperation.js";
 import type { ArtifactCleanupAttempt } from "../ArtifactResourceScope.js";
 import { lstat, realpath } from "node:fs/promises";
+import { dirname } from "node:path";
+import { absoluteCallerPath } from "../../filesystem/callerPath.js";
+import { isPathWithinRoot } from "../../domain/localPath.js";
+import { SafeOutputTreeDestinationRefusal } from "../SafeOutputTreeAdmission.js";
 
 import { compareUnicodeCodePoints } from "../../domain/unicodeCodePointOrder.js";
 import { digestCanonicalValue } from "../../domain/canonicalDigest.js";
@@ -26,8 +30,10 @@ import { SafeOutputTreeCreationFailure } from "../SafeOutputTreeCreationFailure.
 import { ZipArtifactReader } from "../ZipArtifactReader.js";
 import { isZipPackageFormat } from "../../domain/zipPackageFormat.js";
 import { MachOSliceArtifactReader } from "../MachOSliceArtifactReader.js";
+import { NodeSeaArtifactReader } from "../NodeSeaArtifactReader.js";
 import { PyInstallerArtifactReader } from "../PyInstallerArtifactReader.js";
 import { containsPyInstallerArchive } from "../pyinstaller/CArchiveLayout.js";
+import { locateNodeSea } from "../nodeSea/NodeSeaLocation.js";
 import {
   artifactExtractionResultSchema,
   type ArtifactExtractionResult,
@@ -87,23 +93,25 @@ const extractArtifactInScope = async (
 };
 
 /** Materialize a scanned inventory, verifying every current occurrence against it. */
-export const materializeArtifactInventory = async (
+export const materializeArtifactInventoryInScope = async (
   input: ArtifactExtractionInput,
   sourcePath: string,
   snapshot: ArtifactInventorySnapshot,
   signal?: AbortSignal,
 ): Promise<ArtifactExtractionResult> => {
-  return input.resourceScope.run(() =>
-    materializeArtifactInventoryInScope(input, sourcePath, snapshot, signal),
-  );
-};
-
-const materializeArtifactInventoryInScope = async (
-  input: ArtifactExtractionInput,
-  sourcePath: string,
-  snapshot: ArtifactInventorySnapshot,
-  signal?: AbortSignal,
-): Promise<ArtifactExtractionResult> => {
+  abortIfNeeded(signal);
+  // A directory source must never acquire its own output as a new member on
+  // the verification traversal. Resolve the selected parent before any write.
+  const canonicalSource = await realpath(sourcePath);
+  if ((await lstat(canonicalSource)).isDirectory()) {
+    const parent = await realpath(
+      dirname(absoluteCallerPath(input.outputRoot)),
+    );
+    if (isPathWithinRoot(canonicalSource, parent))
+      throw new SafeOutputTreeDestinationRefusal(
+        `Extraction output parent ${parent} is inside source directory ${canonicalSource}. Choose a temporary directory outside the source.`,
+      );
+  }
   abortIfNeeded(signal);
   const containerMetadata = snapshot.occurrences.find(
     (row) => row.logical_path === ".",
@@ -159,8 +167,8 @@ const materializeArtifactInventoryInScope = async (
         input.inputPath,
         `Archive entry ${occurrence.logical_path} is encrypted; REA does not decrypt archive entries, so the archive cannot be extracted completely`,
       );
-    // Inventory keeps an ASAR unpacked entry whose companion file is absent,
-    // but extraction cannot materialize bytes it never observed.
+    // Inventory retains unavailable source occurrences, but extraction cannot
+    // materialize bytes it never observed.
     if (
       occurrence.entry_kind === "file" &&
       occurrence.artifact_id === null &&
@@ -168,14 +176,16 @@ const materializeArtifactInventoryInScope = async (
     )
       throw new ArtifactReaderFailure(
         "unavailable",
-        `ASAR unpacked companion bytes are unavailable for ${occurrence.logical_path}`,
+        `Inventoried source bytes are unavailable for ${occurrence.logical_path}`,
         undefined,
-        {
-          logicalPath: occurrence.logical_path,
-          declaredSha256: null,
-          calculatedSha256: null,
-          unpacked: true,
-        },
+        occurrence.unpacked === true
+          ? {
+              logicalPath: occurrence.logical_path,
+              declaredSha256: null,
+              calculatedSha256: null,
+              unpacked: true,
+            }
+          : undefined,
       );
     if (
       (occurrence.entry_kind !== "file" && occurrence.entry_kind !== "slice") ||
@@ -444,8 +454,8 @@ const createExtractionResult = (
         ),
       ),
       traversal.status === "complete"
-        ? "All regular files in the active artifact were materialized; nested archive contents remain represented by their containing file."
-        : "All inventoried regular files exposed by the active reader were materialized; source traversal coverage is unknown, so the output is not established as a complete source copy. Nested archive contents remain represented by their containing file.",
+        ? "All regular files exposed by the active artifact reader were materialized."
+        : "All inventoried regular files exposed by the active reader were materialized; source traversal coverage is unknown, so the output is not established as a complete source copy.",
       "Publication verifies the selected inventoried regular files; it does not establish complete content decoding.",
       ...(integrityContradictions.length === 0
         ? []
@@ -491,6 +501,8 @@ const requireExtractableFormat = async (
         if (format !== "elf" && format !== "pe" && format !== "mach-o")
           return false;
         abortIfNeeded(signal);
+        if (await locateNodeSea(handle, size, signal)) return true;
+        abortIfNeeded(signal);
         const packaged = await containsPyInstallerArchive(handle, size, signal);
         abortIfNeeded(signal);
         return packaged;
@@ -519,6 +531,7 @@ const createReader = async (
   if (containerFormat === "godot-pck") return new GodotPckArtifactReader(path);
   if (containerFormat === "pyinstaller")
     return new PyInstallerArtifactReader(path);
+  if (containerFormat === "node-sea") return new NodeSeaArtifactReader(path);
   if (await requireExtractableFormat(path, input, signal))
     return new DirectoryArtifactReader(path);
   if (format === "asar")
