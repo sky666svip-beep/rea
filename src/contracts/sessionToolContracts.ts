@@ -3,7 +3,10 @@ import { matchNativeFunctionsInputSchema } from "./native/functionMatchingContra
 import { z } from "zod";
 
 import { absoluteLocalPathStringSchema } from "../domain/localPath.js";
-import { callPathInputSchema } from "../domain/callPathSchemas.js";
+import {
+  callPathRequestSchema,
+  staticRuntimeCorrelationRequestSchema,
+} from "./investigationInputContracts.js";
 import { changedBehaviorInputSchema } from "../domain/changedBehavior.js";
 import { functionComparisonInputSchema } from "../domain/functionComparisonSchemas.js";
 import { processScenarioSchema } from "../domain/process/processScenario.js";
@@ -12,7 +15,6 @@ import {
   updateUnknownInputSchema,
 } from "../domain/residualUnknown.js";
 import { reconstructionVerificationInputSchema } from "../domain/reconstructionVerificationSchemas.js";
-import { staticRuntimeCorrelationInputSchema } from "../domain/staticRuntimeCorrelation.js";
 import { sessionOutputSchemas } from "./toolOutputSchemaGroups.js";
 import {
   closeBinaryInputSchema,
@@ -20,14 +22,14 @@ import {
   openBinaryInputSchema,
 } from "./sessionLifecycleInputs.js";
 import { binarySessionInputSchema } from "./sessionStatusContract.js";
+import { processComparisonInputSchema } from "./processComparisonContracts.js";
+import { artifactComparisonInputSchema } from "./artifactComparisonContracts.js";
 import {
   addressContextInputSchema,
-  artifactComparisonInputSchema,
   bundleComparisonMcpInputSchema,
   importEvidenceBundleInputSchema,
   listUnknownsInputSchema,
   navigationContextInputSchema,
-  processComparisonInputSchema,
   getEvidenceBundleInputSchema,
   verifyUnknownResolutionInputSchema,
 } from "./sessionToolSchemas.js";
@@ -115,7 +117,7 @@ export const SESSION_TOOL_CONTRACTS = [
   ),
   session(
     "compare_functions",
-    "Compare two explicit analyze_function Evidence records or exact retained session references across identity, exact provider text, calls, references, strings, and address-normalized CFG topology. Missing or provider-incompatible facets remain truncated or unknown; every conclusion cites both Evidence sets.",
+    "Compare two explicit analyze_function Evidence records or exact retained session references across identity, exact provider text, calls, references, strings, and address-normalized CFG topology. Authenticated same-artifact entry coordinates establish correspondence independently of renamed labels; metadata and text changes remain separate. Missing or provider-incompatible facets remain truncated or unknown; every conclusion cites both Evidence sets.",
     functionComparisonInputSchema,
   ),
   session(
@@ -125,18 +127,18 @@ export const SESSION_TOOL_CONTRACTS = [
   ),
   session(
     "find_changed_behavior",
-    "Aggregate validated process, artifact, and function comparison Evidence. Runtime observations remain distinct from static behavior candidates; missing or incomplete comparisons produce unresolved findings, never causal claims. Returns every finding inline.",
+    "Aggregate validated process, artifact, and function comparison Evidence, supplied inline or by exact retained-evidence references from this session. Original records and their complete source closure remain authenticated; summaries do not substitute for comparisons. Runtime observations remain distinct from static behavior candidates; missing or incomplete comparisons produce unresolved findings, never causal claims. Returns every finding inline.",
     changedBehaviorInputSchema,
   ),
   session(
     "build_call_path",
-    "Build every shortest direct-callee path inline from complete analyze_function Evidence records using exact canonical addresses. Missing dossiers and provider mixing remain unknown; every node and edge cites source Evidence.",
-    callPathInputSchema,
+    "Build every shortest direct-callee path from complete analyze_function Evidence supplied inline or by exact retained-evidence references. References reuse the complete parent of an analyze_function summary without resending dossiers. Uses exact canonical addresses; missing dossiers and provider mixing remain unknown, and every node and edge cites source Evidence.",
+    callPathRequestSchema,
   ),
   session(
     "correlate_static_and_runtime",
-    "Evaluate every explicit caller-declared hypothesis between exact static comparison findings and runtime comparison dimensions. Similar names or paths are never auto-matched, consistent cochange never proves causality, and unknown or truncated inputs remain unresolved. Returns all correlations and their complete Evidence closure inline.",
-    staticRuntimeCorrelationInputSchema,
+    "Evaluate every explicit caller-declared hypothesis between static and runtime comparison Evidence supplied inline or by exact retained-evidence references. Similar names or paths are never auto-matched, consistent cochange never proves causality, and unknown or truncated inputs remain unresolved. Returns all correlations and their complete Evidence closure inline.",
+    staticRuntimeCorrelationRequestSchema,
   ),
   session(
     "verify_reconstruction",
