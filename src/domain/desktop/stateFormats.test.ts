@@ -5,12 +5,23 @@ import {
   jsonView,
   keyfileView,
   textView,
+  textSyntaxFormat,
   xmlView,
 } from "./stateFormats.js";
 
 const bytes = (text: string) => new TextEncoder().encode(text);
 
 describe("detectStateFormat", () => {
+  it("recognises JSON scalars with mixed-case suffixes and still validates their syntax", () => {
+    for (const text of ["42", "true", "null", '"value"']) {
+      expect(detectStateFormat("/h/a.JsOn", bytes(text))).toBe("json");
+      expect(textSyntaxFormat("/h/a.JSON", text)).toBe("json");
+      expect(detectStateFormat("/h/a.txt", bytes(text))).toBe("text");
+    }
+    expect(detectStateFormat("/h/a.JSON", bytes("42 trailing"))).toBe("text");
+    expect(textSyntaxFormat("/h/a.JSON", "42 trailing")).toBe("text");
+  });
+
   it("recognises SQLite and dconf headers before decoding text", () => {
     expect(detectStateFormat("/h/a.db", bytes("SQLite format 3\0rest"))).toBe(
       "sqlite",
@@ -19,6 +30,15 @@ describe("detectStateFormat", () => {
       "dconf",
     );
     expect(detectStateFormat("/h/blob", Uint8Array.of(1, 0, 2))).toBe("binary");
+  });
+
+  it("recognises a zip archive by its local file header, whatever its name", () => {
+    const header = Uint8Array.of(0x50, 0x4b, 3, 4, 20, 0, 0, 0);
+    expect(detectStateFormat("/h/plate.FCStd", header)).toBe("zip");
+    expect(detectStateFormat("/h/plate.20261105.FCBak", header)).toBe("zip");
+    expect(
+      detectStateFormat("/h/empty.odt", Uint8Array.of(0x50, 0x4b, 5, 6, 0, 0)),
+    ).toBe("binary");
   });
 
   it("tells JSON, XML, key files and plain text apart", () => {
