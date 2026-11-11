@@ -5,7 +5,7 @@
 #   COMMIT_COUNT=$(git rev-list --count upstream/main)
 #   例：v1987 / v1988 ...  该 tag 打在 fork 的 main 上，标记本次同步的快照点。
 #
-# 触发：每天 UTC 16:16+ 手动 workflow_dispatch
+# 触发：每天 UTC 19:16（北京时间次日 03:16）+ 手动 workflow_dispatch
 #
 # ---------------------------------------------------------------------------
 # 重要：必须配置仓库 Secret SYNC_TOKEN
@@ -27,8 +27,8 @@ name: Sync upstream + auto tag
 
 on:
   schedule:
-    # 每天 UTC 16:16
-    - cron: "16 16 * * *"
+    # 每天 UTC 19:16（北京时间次日 03:16）
+    - cron: "16 19 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -67,7 +67,15 @@ jobs:
             echo "::error::请到 Settings -> Secrets and variables -> Actions 添加 SYNC_TOKEN（PAT，需 workflow 权限）。"
             exit 1
           fi
-          echo "SYNC_TOKEN 已配置" >> "$GITHUB_STEP_SUMMARY"
+          # 非空不等于有效：PAT 可能已过期/被吊销。提前验证，避免 checkout 时才诡异地失败。
+          if ! GH_TOKEN="${SYNC_TOKEN}" gh api -i user >/dev/null 2>&1; then
+            echo "::error::SYNC_TOKEN 无效或已过期（gh api user 返回非 2xx）。"
+            echo "::error::请重新生成 PAT（经典 PAT 勾 repo + workflow；或 fine-grained 给 Contents:RW + Workflows:RW），"
+            echo "::error::并更新 Settings -> Secrets and variables -> Actions 里的 SYNC_TOKEN。"
+            echo "::error::（本工作流此前失败的根因就是 SYNC_TOKEN 过期，导致 checkout 无法认证。）"
+            exit 1
+          fi
+          echo "SYNC_TOKEN 已配置且有效" >> "$GITHUB_STEP_SUMMARY"
 
       # ---------- 1. 检出 fork 的 main，取全量历史 + 全部 tag ----------
       - name: Checkout fork main (full history)
@@ -334,6 +342,13 @@ jobs:
           REPO="${GITHUB_REPOSITORY}"
           RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           TITLE="上游同步失败，需要人工介入"
+
+          # 仓库若禁用了 Issues，跳过创建/评论，否则会报 "repository has disabled issues"
+          if [ "$(gh repo view "$REPO" --json hasIssues --jq '.hasIssues' 2>/dev/null)" != "true" ]; then
+            echo "::warning::仓库已禁用 Issues，跳过创建通知 Issue。请直接查看本次运行日志确认失败原因。"
+            echo "（如需自动开 Issue 提醒，到 Settings -> General -> Features 重新勾选 Issues。）" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
 
           gh label create sync-conflict --repo "$REPO" --color B60205 --description "upstream 同步失败或冲突，需要人工介入" --force >/dev/null 2>&1 || true
 
