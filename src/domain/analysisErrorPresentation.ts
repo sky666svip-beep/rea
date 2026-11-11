@@ -145,6 +145,16 @@ export const analysisErrorRemediationAction = (
   if (error instanceof AnalysisTimeoutError) return timeoutRemediation(error);
   if (
     error instanceof ArtifactOperationError &&
+    error.remediationAction !== undefined
+  )
+    return error.remediationAction;
+  if (
+    error instanceof ArtifactOperationError &&
+    error.readerLimit !== undefined
+  )
+    return error.userMessage ?? error.detail ?? error.message;
+  if (
+    error instanceof ArtifactOperationError &&
     error.reason === "limit" &&
     error.boundary === "capacity"
   )
@@ -170,6 +180,11 @@ export const analysisErrorRemediationAction = (
       error.referenceScope === "retained-closure"
       ? "Import the originating Evidence bundle with the selected records and their complete linked sources into the current investigation, or re-run their producers there. Retry after the required records are retained. reset_investigation clears retained records; close_binary preserves them."
       : "Use an exact Evidence reference available from the selected source, supply the complete inline Evidence, re-run its producer, or select/import its Evidence bundle. reset_investigation clears retained records; close_binary preserves them.";
+  if (
+    error instanceof BinaryTargetError &&
+    error.remediationAction !== undefined
+  )
+    return error.remediationAction;
   if (
     error instanceof BinaryTargetError &&
     error.constraint === "directory_requires_file"
