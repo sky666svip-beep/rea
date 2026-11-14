@@ -64,6 +64,8 @@ import {
   AnalysisResourceConstraintError,
   AnalysisTimeoutError,
   AnalysisUnsupportedTargetError,
+  cancelledBy,
+  OwnerCancellation,
 } from "../domain/analysisErrorCore.js";
 import { AnalysisError } from "../domain/analysisErrorBase.js";
 import { analysisErrorWithCleanupFailure } from "../domain/analysisErrorCleanup.js";
@@ -837,10 +839,11 @@ const reservePackageDestinations = async (
  * ADB device inspection and acquisition over a caller-selected adb binary.
  *
  * Every operation composes fixed adb argument vectors: caller values occupy
- * positional arguments, escaped when adb forwards them to the device shell. The provider never
- * starts an emulator, installs platform tools, or drives the device UI; the
- * only device mutation is the caller-requested file push, which requires an
- * explicit overwrite choice and verifies its transfer digest.
+ * positional arguments, escaped when adb forwards them to the device shell.
+ * The provider never starts an emulator, installs platform tools, or drives
+ * the device UI. Some operations mutate device state; a caller-requested file
+ * push requires an explicit overwrite choice and verifies its transfer digest
+ * when the device provides `sha256sum`.
  */
 export class AdbProvider {
   private readonly environment: Readonly<Record<string, string | undefined>>;
@@ -1272,7 +1275,7 @@ export class AdbProvider {
     options?: ExecutionOptions,
   ): Promise<Result<AnalysisExecution, AnalysisError>> {
     if (this.#closing)
-      return err(new AnalysisCancelledError(request.operation));
+      return err(cancelledBy(request.operation, OwnerCancellation.ownerClosed));
     const release = this.#beginOperation();
     try {
       try {
