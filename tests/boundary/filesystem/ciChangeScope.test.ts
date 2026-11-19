@@ -1222,6 +1222,10 @@ it.each([
     ".github/actions/windows-cross-compiler/action.yml",
     { code: true, runtime: true, package: true },
   ],
+  [
+    ".github/actions/ubuntu-archive/action.yml",
+    { code: true, runtime: true, package: true, binary_layout: true },
+  ],
   ["src/domain/peCoffHeader.ts", { code: true, runtime: true, package: true }],
   ["src/domain/dosMz.ts", { code: true, runtime: true, package: true }],
   [
@@ -1786,10 +1790,6 @@ it.each([
   ],
   [
     ".github/workflows/release.yml",
-    { workflows: true, code: true, package: false, website: false },
-  ],
-  [
-    ".github/workflows/pr-readiness.yml",
     { workflows: true, code: true, package: false, website: false },
   ],
   [
