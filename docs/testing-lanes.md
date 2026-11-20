@@ -54,6 +54,7 @@ the verified Ghidra 12.2 and JDK 25 build.
 | `npm run verify:ghidra:cross-format`       | Any supported Ghidra host; also analyzes AArch64 ELF, x86-64 PE, and x86-64 Mach-O                                                                          | `clang`, LLD, and `lld-link` in addition to host-lane prerequisites       |
 | `npm run verify:ghidra:windows`            | Controlled Windows x64 with native x86-64 PE; `-- --x86` selects native x86 PE                                                                              | Ghidra 12.2, full JDK 25, and the matching native artifact                |
 | `npm run verify:ghidra:dol`                | Any supported Ghidra host; source-owned PowerPC GameCube DOL fixture built from a linker script (never executed)                                            | Clang with PowerPC target, LLD, GNU readelf, Ghidra 12.2, and full JDK 25 |
+| `npm run verify:ghidra:ppc64`              | Linux/macOS Ghidra host; source-owned ELFv2 PPC64 executables in both byte orders through CLI and MCP (never executed)                                      | Clang with PowerPC target, LLD, GNU readelf, Ghidra 12.2, and full JDK 25 |
 
 The optional Swift lane compiles a source-owned fixture and checks modern and
 provider-demangled procedure names through real stdio MCP, with and without the
@@ -565,10 +566,13 @@ real-provider lane. See [raw binary analysis](providers/raw-binary.md).
 `tests/conformance/ghidra/ReaLoaderRelocationProbe.java` inside a real Linux
 Ghidra ELF import. The source-owned PIE fixture reads a `const` object from a
 provider library, which the linker copies into `.data.rel.ro` with a copy
-relocation that Ghidra imports as unapplied, the shape of #4177. The probe
-requires that relocation and the reader's read reference to it, a non-writable
-file-backed block, and the bridge's volatile marking and limitation. Source
-`FileBytes` and block permissions must be unchanged. Applied GOT relocations
+relocation that Ghidra imports as unapplied, the shape of #4177. It also reads
+an initial-exec TLS variable from the provider, whose unapplied
+`R_X86_64_TPOFF64` slot sits in the same read-only `.got` as the applied GOT
+entries. The probe requires those relocations and the reader's read reference,
+a non-writable file-backed block, and the bridge's limitation and volatile
+marking of each unapplied destination's data item. Source `FileBytes` and
+block permissions must be unchanged. The GOT block and its applied entries
 must stay non-volatile, and a full-RELRO `-fno-plt` GOT caller must decompile
 identically before and after protection. Ghidra 12.1.4 already shows this
 x86-64 read by name without protection, so the report records whether the
@@ -579,7 +583,7 @@ needs Ghidra/JDK with the native decompiler and a Linux C compiler. The
 change-selected [Ghidra bridge CI lane](https://github.com/morluto/rea/blob/main/.github/workflows/ghidra-bridge-sources.yml)
 runs it with its checksum-verified Ghidra distribution. Read-only sessions
 (Windows P0 and caller-owned existing projects) record the same limitation but
-do not mark blocks volatile; no real-provider lane covers them.
+mark nothing volatile; no real-provider lane covers them.
 
 `npm run verify:ghidra:address-context` runs on Linux with a caller-installed
 Ghidra, full JDK, and an x86-64 ELF GCC toolchain (`CC` selects another compatible
@@ -822,8 +826,8 @@ its own complete result at the exact released revision.
 Package lanes assert the actual Node platform/architecture before verification
 and record those values with the Node version. The package matrix runs up to
 four jobs concurrently on independent hosted runners with explicit
-timeouts and per-runner Node heap/thread limits; Windows retains its curated
-capability lane. Package checks cover installation, CLI/MCP discovery,
+timeouts and per-runner Node heap and thread limits. Windows runs its curated
+capabilities and installed-package suites in separate jobs. Package checks cover installation, CLI/MCP discovery,
 target-free analysis, configuration backups/recovery, Evidence and owned
 lifecycle; Inspector checks execute source-owned loopback targets and special
 filename cases.
@@ -850,13 +854,10 @@ catalog, and managed-conformance metadata. Each shard still installs the locked
 dependencies and runs its assigned tests; full qualification enables coverage. It no longer
 regenerates the same metadata independently.
 
-The build job finds the newest trusted timing artifact for its tier
-(`test-timings-fast` or `test-timings-full`) from a successful default-branch
-push, schedule, or manual CI run, and includes that same report in each shard's
-snapshot. The bounded lookup verifies the producer. Pull-request runs and other
-branches are not producers. A tier with no qualifying artifact leaves history
-unset, and Vitest uses its own assignment. A later schedule that reuses
-qualification without uploading timings leaves the previous artifact in place.
+The build job includes any
+[verified timing history for its tier](development/testing.md#coverage-and-timing)
+in each shard's snapshot. A later schedule that reuses qualification without
+uploading timings leaves the previous artifact in place.
 
 Each tier keeps its own history because stale weights from another tier, or
 from before a large test change, unbalance the shards.
