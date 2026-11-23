@@ -1014,19 +1014,22 @@ const junieLocation = ({
  * where only an absolute `XDG_CONFIG_HOME` counts.
  */
 const gooseUserConfigPath = ({ home, platform, env }: ClientPathContext) => {
-  const pathApi = platform === "win32" ? win32 : posix;
   const root = env.GOOSE_PATH_ROOT;
-  if (root && pathApi.isAbsolute(root))
-    return pathApi.join(root, "config", "config.yaml");
+  if (root !== undefined && isQualifiedCallerPath(root, platform))
+    return appendCallerPath(root, "config/config.yaml", platform);
   return platform === "win32"
-    ? join(
+    ? win32.join(
         windowsAppDataRoots(home, env).roaming,
         "Block",
         "goose",
         "config",
         "config.yaml",
       )
-    : join(absoluteXdgConfigHome({ home, env }), "goose", "config.yaml");
+    : appendCallerPath(
+        absoluteXdgConfigHome({ home, env }),
+        "goose/config.yaml",
+        platform,
+      );
 };
 
 /**
@@ -2052,10 +2055,15 @@ export const supportedClients = (
   platform: NodeJS.Platform,
   env: ClientPathContext["env"] = process.env,
   systemPaths: ClientSystemPaths = {},
+  only?: SupportedClientName,
 ): readonly SetupClient[] => {
   const context = { home, platform, env, systemPaths };
   const definitions: readonly ClientDefinition[] = SUPPORTED_CLIENT_DEFINITIONS;
-  return definitions.map((definition) => {
+  const selected =
+    only === undefined
+      ? definitions
+      : definitions.filter(({ name }) => name === only);
+  return selected.map((definition) => {
     try {
       const location = resolveLocation(definition, context);
       if (!location.ok)
