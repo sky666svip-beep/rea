@@ -1,13 +1,12 @@
 import { createHash } from "node:crypto";
 import { buffer } from "node:stream/consumers";
-import { writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import { Readable } from "node:stream";
 import { deflateSync, gzipSync, inflateSync } from "node:zlib";
 
 import { expect, it, vi } from "vitest";
 
-import { createTestTempDirectory } from "../../tests/fixtures/temporaryDirectory.js";
+import { collectEntries } from "../../tests/fixtures/artifactEntries.js";
+import { createTestTempFile } from "../../tests/fixtures/temporaryDirectory.js";
 import { scanCanonicalArtifactInventory } from "../../tests/fixtures/artifactInventory.js";
 import { ARTIFACT_COMPARISON_EXAMPLE } from "../contracts/artifactComparisonExample.js";
 import { compareArtifacts } from "../domain/artifactComparison.js";
@@ -58,14 +57,10 @@ import {
   buildCpioOdc,
   buildXar,
 } from "./macosPkg/MacosPkg.fixture.js";
-import { parseCpioOdc } from "./macosPkg/CpioOdc.js";
+import { CPIO_ODC_HEADER_BYTES, parseCpioOdc } from "./macosPkg/CpioOdc.js";
 
-const writePkg = async (name: string, bytes: Buffer): Promise<string> => {
-  const directory = await createTestTempDirectory("rea-macos-pkg-");
-  const path = join(directory, name);
-  await writeFile(path, bytes);
-  return path;
-};
+const writePkg = (name: string, bytes: Buffer): Promise<string> =>
+  createTestTempFile("rea-macos-pkg-", name, bytes);
 
 const entriesOf = async (
   bytes: Buffer,
@@ -389,6 +384,118 @@ it("keeps members read before a damaged cpio tail next to the refusal", async ()
   }
 });
 
+it("rejects a cpio trailer that declares a member body", () => {
+  const archive = buildCpioOdc([]);
+  archive.write("00000000001", 65, "ascii");
+  expect(parseCpioOdc(archive)).toMatchObject({
+    ok: false,
+    error: {
+      message: expect.stringContaining("trailer declares a non-zero size"),
+    },
+  });
+});
+
+it.each([
+  { name: "stored", wrap: (bytes: Buffer) => bytes },
+  { name: "gzip", wrap: gzipSync },
+])(
+  "keeps prior package members when a $name cpio has bytes after its trailer",
+  async ({ wrap }) => {
+    const archive = buildCpioOdc([
+      { name: "preinstall", mode: 0o100755, data: Buffer.from("fixture") },
+    ]);
+    const padding = Buffer.alloc(512);
+    const tail = buildCpioOdc([
+      { name: "postinstall", mode: 0o100755, data: Buffer.from("fixture") },
+    ]);
+    const { reader, coverage, entries } = await entriesOf(
+      buildXar({
+        files: [
+          { path: "Payload", bytes: wrap(Buffer.concat([archive, padding])) },
+          {
+            path: "Scripts",
+            bytes: wrap(Buffer.concat([archive, padding, tail])),
+          },
+        ],
+      }),
+      "cpio-tail.pkg",
+    );
+    try {
+      expect(entries.map((entry) => entry.path)).toEqual(
+        expect.arrayContaining(["Payload/preinstall", "Scripts/preinstall"]),
+      );
+      expect(
+        entries.some((entry) => entry.path === "Scripts/postinstall"),
+      ).toBe(false);
+      expect(reader.formatMetadata()?.refusals).toEqual([
+        expect.objectContaining({
+          path: "Scripts",
+          code: "cpio-malformed",
+          message: expect.stringContaining(
+            `non-zero data at offset ${String(archive.length + padding.length)}`,
+          ),
+        }),
+      ]);
+      expect(coverage).toEqual([
+        expect.objectContaining({ status: "unknown" }),
+      ]);
+    } finally {
+      await reader.close();
+    }
+  },
+);
+
+it.each([
+  { name: "stored", wrap: (bytes: Buffer) => bytes },
+  { name: "gzip", wrap: gzipSync },
+])(
+  "keeps prior members when a $name cpio hides bytes in its trailer name",
+  async ({ wrap }) => {
+    const archive = buildCpioOdc([
+      { name: "preinstall", mode: 0o100755, data: Buffer.from("fixture") },
+    ]);
+    const nameOffset = archive.length - Buffer.byteLength("TRAILER!!!\0");
+    const trailerName = Buffer.from("TRAILER!!!\0X");
+    const malformed = Buffer.concat([
+      archive.subarray(0, nameOffset),
+      trailerName,
+    ]);
+    malformed.write(
+      trailerName.length.toString(8).padStart(6, "0"),
+      nameOffset - CPIO_ODC_HEADER_BYTES + 59,
+      "ascii",
+    );
+    const { reader, coverage, entries } = await entriesOf(
+      buildXar({
+        files: [
+          { path: "Payload", bytes: wrap(archive) },
+          { path: "Scripts", bytes: wrap(malformed) },
+        ],
+      }),
+      "cpio-trailer-name.pkg",
+    );
+    try {
+      expect(entries.map((entry) => entry.path)).toEqual(
+        expect.arrayContaining(["Payload/preinstall", "Scripts/preinstall"]),
+      );
+      expect(reader.formatMetadata()?.refusals).toEqual([
+        expect.objectContaining({
+          path: "Scripts",
+          code: "cpio-malformed",
+          message: expect.stringContaining(
+            "trailer name is not exactly NUL-terminated",
+          ),
+        }),
+      ]);
+      expect(coverage).toEqual([
+        expect.objectContaining({ status: "unknown" }),
+      ]);
+    } finally {
+      await reader.close();
+    }
+  },
+);
+
 it("records a cpio name refusal even when it matches the remaining budget", async () => {
   const payload = buildCpioOdc([]);
   payload.write("000000", 59, "ascii");
@@ -557,8 +664,7 @@ it("refuses open() of an oversize gzip member without inflating", async () => {
   const path = await writePkg("open-oversize.pkg", buildGzipPackageInfo());
   const reader = new MacosPkgArtifactReader(path, undefined, 16);
   try {
-    const listed = [];
-    for await (const entry of reader.entries()) listed.push(entry);
+    const listed = await collectEntries(reader);
     const pkgInfo = listed.find((entry) => entry.path === "PackageInfo");
     expect(pkgInfo).toBeDefined();
     await expect(reader.open(pkgInfo!)).rejects.toBeInstanceOf(
